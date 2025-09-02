@@ -1,0 +1,136 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "CMake: Configure (Console Subsystem)",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "-S", ".",
+        "-B", "build",
+        "-G", "Visual Studio 17 2022",
+        "-A", "x64",
+        "-DUSE_SUBSYSTEM_WINDOWS=OFF"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CMake: Configure (Windows Subsystem)",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "-S", ".",
+        "-B", "build",
+        "-G", "Visual Studio 17 2022",
+        "-A", "x64",
+        "-DUSE_SUBSYSTEM_WINDOWS=ON"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CMake: Build Debug",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build", "build",
+        "--config", "Debug",
+        "--target", "chromedirect_demo"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": "$msCompile",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "dependsOn": [
+        "CMake: Configure (Console Subsystem)"
+      ]
+    },
+    {
+      "label": "CMake: Clean Debug",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build", "build",
+        "--config", "Debug",
+        "--target", "clean"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CMake: Build Release",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build", "build",
+        "--config", "Release",
+        "--target", "chromedirect_demo"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": "$msCompile",
+      "dependsOn": [
+        "CMake: Configure (Windows Subsystem)"
+      ]
+    },
+    {
+      "label": "Run: chromedirect_demo (Debug)",
+      "type": "shell",
+      "command": "${workspaceFolder}\\build\\bin\\chromedirect_demo.exe",
+      "options": {
+        "cwd": "${workspaceFolder}\\build\\bin",
+        "env": {
+          "CEF_ROOT": "${env:CEF_ROOT}"
+        }
+      },
+      "dependsOn": [
+        "CMake: Build Debug"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Run: chromedirect_demo (Release)",
+      "type": "shell",
+      "command": "${workspaceFolder}\\build\\bin\\chromedirect_demo.exe",
+      "options": {
+        "cwd": "${workspaceFolder}\\build\\bin",
+        "env": {
+          "CEF_ROOT": "${env:CEF_ROOT}"
+        }
+      },
+      "dependsOn": [
+        "CMake: Build Release"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Open build folder",
+      "type": "shell",
+      "command": "explorer",
+      "args": [
+        "${workspaceFolder}\\build\\bin"
+      ],
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "cefRootPath",
+      "type": "promptString",
+      "description": "Path to extracted CEF binary (folder containing cmake/cef_variables.cmake)",
+      "default": "${workspaceFolder}\\SDK\\cef_binary_139.0.28+g55ab8a8+chromium-139.0.7258.139_windows64_minimal"
+    }
+  ]
+}

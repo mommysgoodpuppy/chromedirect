@@ -13,9 +13,9 @@ set(APP_NAME "chromedirect_demo")
 # Ensure sandbox is disabled in cache before loading CEF (CEF defaults to ON)
 set(USE_SANDBOX OFF CACHE BOOL "Enable or disable use of the sandbox." FORCE)
 
-# CEF root can be specified via -DCEF_ROOT=... or environment
-if(NOT DEFINED CEF_ROOT)
-  if(DEFINED ENV{CEF_ROOT})
+# CEF root can be specified via -DCEF_ROOT=... or environment. Treat empty as unset.
+if(NOT DEFINED CEF_ROOT OR CEF_ROOT STREQUAL "")
+  if(DEFINED ENV{CEF_ROOT} AND NOT "$ENV{CEF_ROOT}" STREQUAL "")
     set(CEF_ROOT $ENV{CEF_ROOT})
   else()
     # Default to SDK path inside repo
@@ -48,6 +48,12 @@ find_package(CEF REQUIRED)
 # Add CEF as a subdirectory (this defines the cef_sandbox target, etc.)
 add_subdirectory(${CEF_ROOT} cef_binary_dir)
 
+# OpenVR paths (submodule)
+set(OPENVR_ROOT "${CMAKE_SOURCE_DIR}/submodules/openvr")
+set(OPENVR_INCLUDE_DIR "${OPENVR_ROOT}/headers")
+set(OPENVR_LIB_DIR "${OPENVR_ROOT}/lib/win64")
+set(OPENVR_BIN_DIR "${OPENVR_ROOT}/bin/win64")
+
 # Sources
 set(APP_SOURCES
   src/main.cpp
@@ -79,6 +85,11 @@ endif()
 # Additional libraries (system libs)
 target_link_libraries(${APP_NAME} PRIVATE d3d11 dxgi)
 
+# OpenVR library
+target_include_directories(${APP_NAME} PRIVATE ${OPENVR_INCLUDE_DIR})
+target_link_directories(${APP_NAME} PRIVATE ${OPENVR_LIB_DIR})
+target_link_libraries(${APP_NAME} PRIVATE openvr_api)
+
 # Include directories (CEF headers)
 target_include_directories(${APP_NAME} PRIVATE ${CEF_INCLUDE_PATH})
 
@@ -101,6 +112,13 @@ set(CEF_RUNTIME_DEST "${CMAKE_BINARY_DIR}/bin")
 COPY_FILES(${APP_NAME} "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${CEF_RUNTIME_DEST}")
 # Resources (paks, icu, locales directory) live under CEF_RESOURCE_DIR
 COPY_FILES(${APP_NAME} "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${CEF_RUNTIME_DEST}")
+
+# Copy OpenVR runtime DLL next to the binary
+if(EXISTS "${OPENVR_BIN_DIR}/openvr_api.dll")
+  add_custom_command(TARGET ${APP_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${OPENVR_BIN_DIR}/openvr_api.dll" "${CEF_RUNTIME_DEST}/openvr_api.dll")
+endif()
 
 # Subsystem
 if(MSVC AND USE_SUBSYSTEM_WINDOWS)
