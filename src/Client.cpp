@@ -1,5 +1,5 @@
 #include "Client.h"
-#include "D3DPresenter.h"
+#include "OpenVRPresenter.h"
 
 #include <include/cef_browser.h>
 #include <include/cef_command_line.h>
@@ -11,7 +11,7 @@
 #include <string>
 #include <iostream>
 
-OffscreenClient::OffscreenClient(HWND host_window, std::shared_ptr<D3DPresenter> presenter, int width, int height, float scale)
+OffscreenClient::OffscreenClient(HWND host_window, std::shared_ptr<OpenVRPresenter> presenter, int width, int height, float scale)
     : host_window_(host_window), presenter_(std::move(presenter)), width_(width), height_(height), scale_(scale) {
   std::cout << "[Client] OffscreenClient created (" << width << "x" << height << ", scale=" << scale << ")\n";
 }

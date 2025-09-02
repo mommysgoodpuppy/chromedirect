@@ -61,6 +61,8 @@ set(APP_SOURCES
   src/Client.cpp
   src/D3DPresenter.h
   src/D3DPresenter.cpp
+  src/OpenVRPresenter.h
+  src/OpenVRPresenter.cpp
 )
 
 # Create the executable target
@@ -73,8 +75,9 @@ set(CEF_HELPER_APP ON)
 ## Apply standard CEF target properties (compile flags/defines, linker flags, include dirs)
 SET_EXECUTABLE_TARGET_PROPERTIES(${APP_NAME})
 
-## Create an imported logical target for libcef
-ADD_LOGICAL_TARGET(cef_lib "${CEF_LIB_DEBUG}" "${CEF_LIB_RELEASE}")
+## Create an imported logical target for libcef (use release libs for both debug and release)
+# CEF minimal distribution doesn't include debug libs
+ADD_LOGICAL_TARGET(cef_lib "${CEF_LIB_RELEASE}" "${CEF_LIB_RELEASE}")
 
 ## Link with libcef, CEF wrapper, sandbox (if enabled), and system libs
 target_link_libraries(${APP_NAME} PRIVATE cef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS})
@@ -120,7 +123,12 @@ if(EXISTS "${OPENVR_BIN_DIR}/openvr_api.dll")
     "${OPENVR_BIN_DIR}/openvr_api.dll" "${CEF_RUNTIME_DEST}/openvr_api.dll")
 endif()
 
-# Subsystem
-if(MSVC AND USE_SUBSYSTEM_WINDOWS)
-  set_target_properties(${APP_NAME} PROPERTIES LINK_FLAGS "/SUBSYSTEM:WINDOWS")
+# Subsystem and entry point
+if(MSVC)
+  if(USE_SUBSYSTEM_WINDOWS)
+    set_target_properties(${APP_NAME} PROPERTIES LINK_FLAGS "/SUBSYSTEM:WINDOWS")
+  else()
+    # Console subsystem but still use wWinMain entry point
+    set_target_properties(${APP_NAME} PROPERTIES LINK_FLAGS "/SUBSYSTEM:CONSOLE /ENTRY:wWinMainCRTStartup")
+  endif()
 endif()

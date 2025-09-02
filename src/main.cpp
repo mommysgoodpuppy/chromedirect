@@ -1,5 +1,5 @@
 #include "Client.h"
-#include "D3DPresenter.h"
+#include "OpenVRPresenter.h"
 
 #include <include/cef_app.h>
 #include <include/cef_command_line.h>
@@ -201,21 +201,27 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   }
   std::cout << "[CEF Demo] CEF initialized successfully\n";
 
-  // Presenter
-  std::cout << "[CEF Demo] Initializing D3D presenter...\n";
-  auto presenter = std::make_shared<D3DPresenter>();
-  if (!presenter->Initialize(hWnd, width, height, 1.0f)) {
-    std::cerr << "[CEF Demo] ERROR: D3D presenter initialization failed!\n";
+  // OpenVR Presenter
+  std::cout << "[CEF Demo] Initializing OpenVR presenter...\n";
+  auto presenter = std::make_shared<OpenVRPresenter>();
+  if (!presenter->Initialize("cef.web.overlay", width, height, 1.0f)) {
+    std::cerr << "[CEF Demo] ERROR: OpenVR presenter initialization failed!\n";
     CefShutdown();
     return -1;
   }
-  std::cout << "[CEF Demo] D3D presenter initialized successfully\n";
+  std::cout << "[CEF Demo] OpenVR presenter initialized successfully\n";
 
   // Create browser windowless
   CefWindowInfo wi;
   wi.SetAsWindowless(hWnd);
   wi.windowless_rendering_enabled = true;
   wi.shared_texture_enabled = true;
+  
+  // Set the D3D device for CEF to match our OpenVR presenter
+  if (auto device = presenter->GetDevice()) {
+    wi.shared_texture_enabled = true;
+    std::cout << "[CEF Demo] Using shared D3D device for CEF\n";
+  }
 
   CefBrowserSettings bs;
   bs.windowless_frame_rate = 60;
