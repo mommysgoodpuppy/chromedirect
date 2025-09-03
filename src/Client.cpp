@@ -1,6 +1,4 @@
 #include "Client.h"
-#include "OpenVRPresenter.h"
-#include "D3DPresenter.h"
 
 #include <include/cef_browser.h>
 #include <include/cef_command_line.h>
@@ -12,14 +10,9 @@
 #include <string>
 #include <iostream>
 
-OffscreenClient::OffscreenClient(HWND host_window, std::shared_ptr<OpenVRPresenter> presenter, int width, int height, float scale)
-    : host_window_(host_window), presenter_(std::move(presenter)), is_vr_mode_(true), width_(width), height_(height), scale_(scale) {
-  std::cout << "[Client] OffscreenClient created with OpenVR presenter (" << width << "x" << height << ", scale=" << scale << ")\n";
-}
-
-OffscreenClient::OffscreenClient(HWND host_window, std::shared_ptr<D3DPresenter> presenter, int width, int height, float scale)
-    : host_window_(host_window), presenter_(std::move(presenter)), is_vr_mode_(false), width_(width), height_(height), scale_(scale) {
-  std::cout << "[Client] OffscreenClient created with D3D presenter (" << width << "x" << height << ", scale=" << scale << ")\n";
+OffscreenClient::OffscreenClient(HWND host_window, std::shared_ptr<Presenter> presenter, int width, int height, float scale)
+    : host_window_(host_window), presenter_(std::move(presenter)), width_(width), height_(height), scale_(scale) {
+  std::cout << "[Client] OffscreenClient created (" << width << "x" << height << ", scale=" << scale << ")\n";
 }
 
 void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
@@ -85,13 +78,7 @@ void OffscreenClient::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
   
   got_accel_.store(true, std::memory_order_relaxed);
   if (presenter_) {
-    if (is_vr_mode_) {
-      auto vr_presenter = std::static_pointer_cast<OpenVRPresenter>(presenter_);
-      vr_presenter->PresentSharedHandle(info.shared_texture_handle, width_, height_);
-    } else {
-      auto d3d_presenter = std::static_pointer_cast<D3DPresenter>(presenter_);
-      d3d_presenter->PresentSharedHandle(info.shared_texture_handle, width_, height_);
-    }
+    presenter_->PresentSharedHandle(info.shared_texture_handle, width_, height_);
   } else {
     std::cerr << "[Client] ERROR: No presenter available for OnAcceleratedPaint!\n";
   }

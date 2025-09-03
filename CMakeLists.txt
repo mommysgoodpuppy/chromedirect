@@ -59,6 +59,7 @@ set(APP_SOURCES
   src/main.cpp
   src/Client.h
   src/Client.cpp
+  src/Presenter.h
   src/D3DPresenter.h
   src/D3DPresenter.cpp
   src/OpenVRPresenter.h

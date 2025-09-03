@@ -9,9 +9,7 @@
 #include <windows.h>
 #include <memory>
 #include <atomic>
-
-class OpenVRPresenter;
-class D3DPresenter;
+#include "Presenter.h"
 
 class OffscreenClient final : public CefClient,
                               public CefLifeSpanHandler,
@@ -19,8 +17,7 @@ class OffscreenClient final : public CefClient,
                               public CefDisplayHandler,
                               public CefRequestHandler {
 public:
-  OffscreenClient(HWND host_window, std::shared_ptr<OpenVRPresenter> presenter, int width, int height, float scale = 1.0f);
-  OffscreenClient(HWND host_window, std::shared_ptr<D3DPresenter> presenter, int width, int height, float scale = 1.0f);
+  OffscreenClient(HWND host_window, std::shared_ptr<Presenter> presenter, int width, int height, float scale = 1.0f);
 
   // CefClient
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
@@ -61,8 +58,7 @@ public:
 
 private:
   HWND host_window_ = nullptr;
-  std::shared_ptr<void> presenter_; // Can hold either OpenVRPresenter or D3DPresenter
-  bool is_vr_mode_;
+  std::shared_ptr<Presenter> presenter_;
   CefRefPtr<CefBrowser> browser_;
   int width_ = 800;
   int height_ = 600;

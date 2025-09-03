@@ -1,6 +1,7 @@
 #include "Client.h"
 #include "OpenVRPresenter.h"
 #include "D3DPresenter.h"
+#include "Presenter.h"
 
 #include <include/cef_app.h>
 #include <include/cef_command_line.h>
@@ -220,10 +221,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   std::cout << "[CEF Demo] CEF initialized successfully\n";
 
   // Presenter (VR or regular D3D)
-  std::shared_ptr<void> presenter;
+  std::shared_ptr<Presenter> presenter;
   if constexpr (ENABLE_VR_MODE) {
     std::cout << "[CEF Demo] Initializing OpenVR presenter...\n";
-    auto vr_presenter = std::make_shared<OpenVRPresenter>();
+    std::shared_ptr<OpenVRPresenter> vr_presenter = std::make_shared<OpenVRPresenter>();
     if (!vr_presenter->Initialize("cef.web.overlay", width, height, 1.0f)) {
       std::cerr << "[CEF Demo] ERROR: OpenVR presenter initialization failed!\n";
       CefShutdown();
@@ -233,7 +234,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     presenter = vr_presenter;
   } else {
     std::cout << "[CEF Demo] Initializing D3D presenter...\n";
-    auto d3d_presenter = std::make_shared<D3DPresenter>();
+    std::shared_ptr<D3DPresenter> d3d_presenter = std::make_shared<D3DPresenter>();
     if (!d3d_presenter->Initialize(hWnd, width, height, 1.0f)) {
       std::cerr << "[CEF Demo] ERROR: D3D presenter initialization failed!\n";
       CefShutdown();
@@ -253,34 +254,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   wi.windowless_rendering_enabled = true;
   wi.shared_texture_enabled = true;
   
-  // Set the D3D device for CEF to match our presenter
-  if constexpr (ENABLE_VR_MODE) {
-    if (auto vr_presenter = std::static_pointer_cast<OpenVRPresenter>(presenter)) {
-      if (auto device = vr_presenter->GetDevice()) {
-        wi.shared_texture_enabled = true;
-        std::cout << "[CEF Demo] Using shared D3D device for CEF (VR mode)\n";
-      }
-    }
-  } else {
-    if (auto d3d_presenter = std::static_pointer_cast<D3DPresenter>(presenter)) {
-      if (auto device = d3d_presenter->GetDevice()) {
-        wi.shared_texture_enabled = true;
-        std::cout << "[CEF Demo] Using shared D3D device for CEF (D3D mode)\n";
-      }
-    }
+  // Set the D3D device for CEF to match our presenter (if needed)
+  if (presenter && presenter->GetDevice()) {
+    wi.shared_texture_enabled = true;
+    std::cout << "[CEF Demo] Using presenter's D3D11 device with shared textures\n";
   }
 
   CefBrowserSettings bs;
   bs.windowless_frame_rate = 60;
 
   std::cout << "[CEF Demo] Creating browser client...\n";
-  if constexpr (ENABLE_VR_MODE) {
-    auto vr_presenter = std::static_pointer_cast<OpenVRPresenter>(presenter);
-    g_client = new OffscreenClient(nullptr, vr_presenter, width, height, 1.0f);
-  } else {
-    auto d3d_presenter = std::static_pointer_cast<D3DPresenter>(presenter);
-    g_client = new OffscreenClient(hWnd, d3d_presenter, width, height, 1.0f);
-  }
+  g_client = new OffscreenClient(ENABLE_VR_MODE ? nullptr : hWnd, presenter, width, height, 1.0f);
   CefRefPtr<CefClient> base_client = g_client;
 
   std::cout << "[CEF Demo] Creating browser with URL: https://www.google.com\n";

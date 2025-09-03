@@ -110,8 +110,8 @@ bool OpenVRPresenter::InitializeOpenVR() {
     }
     std::cout << "[OpenVR] Overlay created with handle: " << overlay_handle_ << "\n";
     
-    // Set overlay properties
-    vr::VROverlay()->SetOverlayWidthInMeters(overlay_handle_, 2.0f);
+    // Set overlay properties (use scale_ as width in meters)
+    vr::VROverlay()->SetOverlayWidthInMeters(overlay_handle_, scale_);
     vr::VROverlay()->SetOverlayAlpha(overlay_handle_, 1.0f);
     vr::VROverlay()->SetOverlayColor(overlay_handle_, 1.0f, 1.0f, 1.0f);
     
@@ -279,54 +279,64 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     }
   }
 
-  // Create a legacy-shared (non-NT handle) texture and copy the contents, then submit via DXGI shared handle
+  // Create or reuse a legacy-shared (non-NT handle) texture and copy the contents, then submit via DXGI shared handle
   D3D11_TEXTURE2D_DESC submitDesc = {};
   submitTex->GetDesc(&submitDesc);
-  D3D11_TEXTURE2D_DESC shareDesc = submitDesc;
-  shareDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED; // legacy shared handle
-  // Ensure SRV bind for potential internal usage
-  shareDesc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
-  ComPtr<ID3D11Texture2D> sharedLegacyTex;
-  HRESULT hrShare = device_->CreateTexture2D(&shareDesc, nullptr, sharedLegacyTex.GetAddressOf());
-  if (FAILED(hrShare)) {
-    std::cerr << "[OpenVR] ERROR: Failed to create legacy-shared texture, hr=0x" << std::hex << hrShare << std::dec << "\n";
-    // Fall back to direct pointer submission
-    last_submitted_texture_ = submitTex;
-    vr::Texture_t eyeTexture = { (void*)submitTex.Get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
-    vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
-    
-    if (overlayError != vr::VROverlayError_None) {
-      std::cerr << "[OpenVR] ERROR: SetOverlayTexture failed: " << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
-    } else if (present_count <= 5) {
-      std::cout << "[OpenVR] Texture submitted to overlay successfully (direct pointer fallback)\n";
+  const bool sizeChanged = (shared_legacy_tex_ == nullptr) ||
+                           (shared_legacy_desc_.Width != submitDesc.Width) ||
+                           (shared_legacy_desc_.Height != submitDesc.Height) ||
+                           (shared_legacy_desc_.Format != submitDesc.Format);
+  if (sizeChanged) {
+    shared_legacy_tex_.Reset();
+    shared_legacy_handle_ = nullptr;
+    shared_legacy_desc_ = submitDesc;
+    shared_legacy_desc_.MiscFlags = D3D11_RESOURCE_MISC_SHARED; // legacy shared handle
+    shared_legacy_desc_.BindFlags |= D3D11_BIND_SHADER_RESOURCE; // ensure SRV-capable
+    HRESULT hrShare = device_->CreateTexture2D(&shared_legacy_desc_, nullptr, shared_legacy_tex_.GetAddressOf());
+    if (FAILED(hrShare)) {
+      std::cerr << "[OpenVR] ERROR: Failed to create/recreate legacy-shared texture, hr=0x" << std::hex << hrShare << std::dec << "\n";
+      // Fall back to direct pointer submission
+      last_submitted_texture_ = submitTex;
+      vr::Texture_t eyeTexture = { (void*)submitTex.Get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
+      vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
+      if (overlayError != vr::VROverlayError_None) {
+        std::cerr << "[OpenVR] ERROR: SetOverlayTexture failed: " << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
+      } else if (present_count <= 5) {
+        std::cout << "[OpenVR] Texture submitted to overlay successfully (direct pointer fallback)\n";
+      }
+      goto post_submit_visibility_check; // skip DXGI handle path this frame
     }
-  } else {
-    context_->CopyResource(sharedLegacyTex.Get(), submitTex.Get());
-    context_->Flush();
+    // Fetch shared handle once
     ComPtr<IDXGIResource> dxgiRes;
-    if (FAILED(sharedLegacyTex.As(&dxgiRes))) {
+    if (FAILED(shared_legacy_tex_.As(&dxgiRes))) {
       std::cerr << "[OpenVR] ERROR: Failed to QI IDXGIResource on legacy-shared texture\n";
     } else {
-      HANDLE legacyHandle = nullptr;
-      HRESULT hrHandle = dxgiRes->GetSharedHandle(&legacyHandle);
-      if (FAILED(hrHandle) || !legacyHandle) {
+      HRESULT hrHandle = dxgiRes->GetSharedHandle(&shared_legacy_handle_);
+      if (FAILED(hrHandle) || !shared_legacy_handle_) {
         std::cerr << "[OpenVR] ERROR: GetSharedHandle failed for legacy-shared texture, hr=0x" << std::hex << hrHandle << std::dec << "\n";
-      } else {
-        if (present_count <= 3) {
-          std::cout << "[OpenVR] Submitting via DXGI shared handle: " << legacyHandle << "\n";
-        }
-        last_submitted_texture_ = sharedLegacyTex; // hold reference until after submit
-        vr::Texture_t eyeTexture = { (void*)legacyHandle, vr::TextureType_DXGISharedHandle, vr::ColorSpace_Auto };
-        vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
-        if (overlayError != vr::VROverlayError_None) {
-          std::cerr << "[OpenVR] ERROR: SetOverlayTexture (DXGISharedHandle) failed: "
-                    << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
-        } else if (present_count <= 5) {
-          std::cout << "[OpenVR] Texture submitted to overlay successfully (DXGI shared handle)\n";
-        }
+      } else if (present_count <= 3) {
+        std::cout << "[OpenVR] Obtained DXGI shared handle: " << shared_legacy_handle_ << "\n";
       }
     }
   }
+
+  if (shared_legacy_tex_) {
+    context_->CopyResource(shared_legacy_tex_.Get(), submitTex.Get());
+    context_->Flush();
+    last_submitted_texture_ = shared_legacy_tex_; // ensure lifetime across submit
+    if (shared_legacy_handle_) {
+      vr::Texture_t eyeTexture = { (void*)shared_legacy_handle_, vr::TextureType_DXGISharedHandle, vr::ColorSpace_Auto };
+      vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
+      if (overlayError != vr::VROverlayError_None) {
+        std::cerr << "[OpenVR] ERROR: SetOverlayTexture (DXGISharedHandle) failed: "
+                  << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
+      } else if (present_count <= 5) {
+        std::cout << "[OpenVR] Texture submitted to overlay successfully (DXGI shared handle)\n";
+      }
+    }
+  }
+
+post_submit_visibility_check:
   if (present_count <= 3) {
     bool visible = vr::VROverlay()->IsOverlayVisible(overlay_handle_);
     std::cout << "[OpenVR] Overlay visible: " << (visible ? "true" : "false") << "\n";
@@ -341,6 +351,16 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     UINT64 releaseKey = (acquiredKey == 0) ? 1 : 0;
     keyedMutex->ReleaseSync(releaseKey);
   }
+
+  // Drain overlay events to keep the queue from growing
+  vr::VREvent_t evt;
+  while (vr::VROverlay()->PollNextOverlayEvent(overlay_handle_, &evt, sizeof(evt))) {
+    // No-op: could add minimal logging for unusual events
+  }
+
+  // Optionally pace submissions with the runtime's update rate to avoid spamming.
+  // This blocks until the top of frame (or timeout). Keep timeout conservative to avoid long UI stalls.
+  vr::VROverlay()->WaitFrameSync(100);
 }
 
 void OpenVRPresenter::Resize(int width, int height, float scale) {
@@ -349,6 +369,9 @@ void OpenVRPresenter::Resize(int width, int height, float scale) {
   height_ = height;
   scale_ = scale;
   std::cout << "[OpenVR] Resized to: " << width << "x" << height << ", scale=" << scale << "\n";
+  if (overlay_created_ && overlay_handle_ != vr::k_ulOverlayHandleInvalid) {
+    vr::VROverlay()->SetOverlayWidthInMeters(overlay_handle_, scale_);
+  }
 }
 
 void OpenVRPresenter::Cleanup() {
@@ -367,6 +390,12 @@ void OpenVRPresenter::Cleanup() {
     openvr_initialized_ = false;
   }
   
+  // Release shared legacy resources
+  shared_legacy_tex_.Reset();
+  shared_legacy_handle_ = nullptr;
+  ZeroMemory(&shared_legacy_desc_, sizeof(shared_legacy_desc_));
+  last_submitted_texture_.Reset();
+
   context_.Reset();
   device_.Reset();
 }

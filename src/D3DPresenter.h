@@ -6,21 +6,22 @@
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 #include <mutex>
+#include "Presenter.h"
 
-class D3DPresenter {
+class D3DPresenter : public Presenter {
 public:
   D3DPresenter();
   ~D3DPresenter();
 
   bool Initialize(HWND hwnd, int width, int height, float scale = 1.0f);
-  void Resize(int width, int height, float scale = 1.0f);
+  void Resize(int width, int height, float scale = 1.0f) override;
 
   // Present a shared texture handle coming from CEF OnAcceleratedPaint.
   // width/height are the source texture size in pixels.
-  void PresentSharedHandle(HANDLE shared_handle, int width, int height);
+  void PresentSharedHandle(HANDLE shared_handle, int width, int height) override;
 
   HWND GetHwnd() const { return hwnd_; }
-  ID3D11Device* GetDevice() const { return device_.Get(); }
+  Microsoft::WRL::ComPtr<ID3D11Device> GetDevice() const override { return device_; }
 
 private:
   bool CreateDeviceSwapchain();

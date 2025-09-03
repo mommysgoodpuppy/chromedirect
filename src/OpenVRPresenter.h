@@ -6,18 +6,19 @@
 #include <wrl/client.h>
 #include <mutex>
 #include <openvr.h>
+#include "Presenter.h"
 
-class OpenVRPresenter {
+class OpenVRPresenter : public Presenter {
 public:
   OpenVRPresenter();
   ~OpenVRPresenter();
 
   bool Initialize(const char* overlay_key, int width, int height, float scale = 1.0f);
-  void Resize(int width, int height, float scale);
-  void PresentSharedHandle(HANDLE shared_handle, int srcWidth, int srcHeight);
+  void Resize(int width, int height, float scale) override;
+  void PresentSharedHandle(HANDLE shared_handle, int srcWidth, int srcHeight) override;
 
   // Get the D3D11 device for CEF compatibility
-  Microsoft::WRL::ComPtr<ID3D11Device> GetDevice() const { return device_; }
+  Microsoft::WRL::ComPtr<ID3D11Device> GetDevice() const override { return device_; }
 
 private:
   bool InitializeOpenVR();
@@ -40,4 +41,9 @@ private:
 
   // Keep a reference to the most recently submitted texture to ensure lifetime across frames.
   Microsoft::WRL::ComPtr<ID3D11Texture2D> last_submitted_texture_;
+
+  // Reusable legacy-shared texture for DXGI handle submission to avoid per-frame allocations.
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> shared_legacy_tex_;
+  D3D11_TEXTURE2D_DESC shared_legacy_desc_ = {};
+  HANDLE shared_legacy_handle_ = nullptr;
 };
