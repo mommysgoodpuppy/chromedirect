@@ -20,6 +20,7 @@ public:
   void PresentSharedHandle(HANDLE shared_handle, int width, int height);
 
   HWND GetHwnd() const { return hwnd_; }
+  ID3D11Device* GetDevice() const { return device_.Get(); }
 
 private:
   bool CreateDeviceSwapchain();

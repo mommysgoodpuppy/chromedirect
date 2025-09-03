@@ -114,6 +114,17 @@ bool OpenVRPresenter::InitializeOpenVR() {
     vr::VROverlay()->SetOverlayAlpha(overlay_handle_, 1.0f);
     vr::VROverlay()->SetOverlayColor(overlay_handle_, 1.0f, 1.0f, 1.0f);
     
+    // Set texture bounds to match our expected size
+    vr::VRTextureBounds_t bounds;
+    bounds.uMin = 0.0f; bounds.vMin = 0.0f;
+    bounds.uMax = 1.0f; bounds.vMax = 1.0f;
+    vr::VROverlay()->SetOverlayTextureBounds(overlay_handle_, &bounds);
+    
+    // Make overlay visible
+    vr::VROverlay()->ShowOverlay(overlay_handle_);
+    
+    std::cout << "[OpenVR] Overlay configured: 2.0m width, bounds set, visible\n";
+    
     // Position it in front of the user
     vr::HmdMatrix34_t transform = {};
     transform.m[0][0] = 1.0f; transform.m[0][1] = 0.0f; transform.m[0][2] = 0.0f; transform.m[0][3] = 0.0f;
