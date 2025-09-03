@@ -2,8 +2,7 @@
 
 #include <stdexcept>
 #include <iostream>
-#include <thread>
-#include <chrono>
+#include <dxgi.h>
 
 using Microsoft::WRL::ComPtr;
 
@@ -222,24 +221,24 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
               << "\n";
   }
 
-  // Schedule a test red texture submission once after a short delay for debugging overlay pipeline
-  if (!test_texture_timer_started_.load(std::memory_order_relaxed)) {
-    test_texture_timer_started_.store(true, std::memory_order_relaxed);
-    ScheduleTestTextureAfterDelay(srcDesc.Width, srcDesc.Height, srcDesc.Format, 3000);
-  }
+  // (debug red texture scheduling removed)
 
-  // Acquire keyed mutex if present
+  // Acquire keyed mutex if present (try key 0, then 1). Release with the same key we acquired.
   ComPtr<IDXGIKeyedMutex> keyedMutex;
+  UINT64 acquiredKey = UINT64_MAX;
   if (SUCCEEDED(sharedTex.As(&keyedMutex))) {
-    // Consumer pattern: acquire key 1 (producer releases with 1), release with 0
-    HRESULT acquireResult = keyedMutex->AcquireSync(1, 100); // Wait up to 100ms
-    if (FAILED(acquireResult)) {
-      if (present_count <= 5) {
-        std::cerr << "[OpenVR] WARNING: Failed to acquire keyed mutex, HRESULT: 0x" << std::hex << acquireResult << std::dec << "\n";
+    HRESULT acquireResult = keyedMutex->AcquireSync(0, 50);
+    if (SUCCEEDED(acquireResult)) {
+      acquiredKey = 0;
+      if (present_count <= 3) std::cout << "[OpenVR] Keyed mutex acquired with key 0\n";
+    } else {
+      acquireResult = keyedMutex->AcquireSync(1, 50);
+      if (SUCCEEDED(acquireResult)) {
+        acquiredKey = 1;
+        if (present_count <= 3) std::cout << "[OpenVR] Keyed mutex acquired with key 1\n";
+      } else if (present_count <= 5) {
+        std::cerr << "[OpenVR] WARNING: Failed to acquire keyed mutex with key 0 or 1, hr=0x" << std::hex << acquireResult << std::dec << "\n";
       }
-      // Continue anyway - some shared textures don't use keyed mutex
-    } else if (present_count <= 3) {
-      std::cout << "[OpenVR] Keyed mutex acquired\n";
     }
   }
 
@@ -269,28 +268,65 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
       if (srcDesc.SampleDesc.Count > 1) {
         // Resolve MSAA into single-sample
         context_->ResolveSubresource(dstTex.Get(), 0, sharedTex.Get(), 0, srcDesc.Format);
+        context_->Flush();
         if (present_count <= 3) std::cout << "[OpenVR] Resolved MSAA texture for overlay submit\n";
       } else {
         context_->CopyResource(dstTex.Get(), sharedTex.Get());
+        context_->Flush();
         if (present_count <= 3) std::cout << "[OpenVR] Copied texture into SRV-capable texture for overlay submit\n";
       }
       submitTex = dstTex;
     }
   }
 
-  // Hold reference to ensure lifetime across SetOverlayTexture
-  last_submitted_texture_ = submitTex;
-
-  // Submit texture to OpenVR overlay
-  vr::Texture_t eyeTexture = { (void*)submitTex.Get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
-  vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
-  
-  if (overlayError != vr::VROverlayError_None) {
-    std::cerr << "[OpenVR] ERROR: SetOverlayTexture failed: " << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
-  } else if (present_count <= 5) {
-    std::cout << "[OpenVR] Texture submitted to overlay successfully\n";
+  // Create a legacy-shared (non-NT handle) texture and copy the contents, then submit via DXGI shared handle
+  D3D11_TEXTURE2D_DESC submitDesc = {};
+  submitTex->GetDesc(&submitDesc);
+  D3D11_TEXTURE2D_DESC shareDesc = submitDesc;
+  shareDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED; // legacy shared handle
+  // Ensure SRV bind for potential internal usage
+  shareDesc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+  ComPtr<ID3D11Texture2D> sharedLegacyTex;
+  HRESULT hrShare = device_->CreateTexture2D(&shareDesc, nullptr, sharedLegacyTex.GetAddressOf());
+  if (FAILED(hrShare)) {
+    std::cerr << "[OpenVR] ERROR: Failed to create legacy-shared texture, hr=0x" << std::hex << hrShare << std::dec << "\n";
+    // Fall back to direct pointer submission
+    last_submitted_texture_ = submitTex;
+    vr::Texture_t eyeTexture = { (void*)submitTex.Get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
+    vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
+    
+    if (overlayError != vr::VROverlayError_None) {
+      std::cerr << "[OpenVR] ERROR: SetOverlayTexture failed: " << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
+    } else if (present_count <= 5) {
+      std::cout << "[OpenVR] Texture submitted to overlay successfully (direct pointer fallback)\n";
+    }
+  } else {
+    context_->CopyResource(sharedLegacyTex.Get(), submitTex.Get());
+    context_->Flush();
+    ComPtr<IDXGIResource> dxgiRes;
+    if (FAILED(sharedLegacyTex.As(&dxgiRes))) {
+      std::cerr << "[OpenVR] ERROR: Failed to QI IDXGIResource on legacy-shared texture\n";
+    } else {
+      HANDLE legacyHandle = nullptr;
+      HRESULT hrHandle = dxgiRes->GetSharedHandle(&legacyHandle);
+      if (FAILED(hrHandle) || !legacyHandle) {
+        std::cerr << "[OpenVR] ERROR: GetSharedHandle failed for legacy-shared texture, hr=0x" << std::hex << hrHandle << std::dec << "\n";
+      } else {
+        if (present_count <= 3) {
+          std::cout << "[OpenVR] Submitting via DXGI shared handle: " << legacyHandle << "\n";
+        }
+        last_submitted_texture_ = sharedLegacyTex; // hold reference until after submit
+        vr::Texture_t eyeTexture = { (void*)legacyHandle, vr::TextureType_DXGISharedHandle, vr::ColorSpace_Auto };
+        vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
+        if (overlayError != vr::VROverlayError_None) {
+          std::cerr << "[OpenVR] ERROR: SetOverlayTexture (DXGISharedHandle) failed: "
+                    << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
+        } else if (present_count <= 5) {
+          std::cout << "[OpenVR] Texture submitted to overlay successfully (DXGI shared handle)\n";
+        }
+      }
+    }
   }
-
   if (present_count <= 3) {
     bool visible = vr::VROverlay()->IsOverlayVisible(overlay_handle_);
     std::cout << "[OpenVR] Overlay visible: " << (visible ? "true" : "false") << "\n";
@@ -300,9 +336,10 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     }
   }
 
-  // Release keyed mutex if we acquired it
-  if (keyedMutex) {
-    keyedMutex->ReleaseSync(0);
+  // Release keyed mutex if we acquired it; set opposite key for producer/consumer handoff
+  if (keyedMutex && acquiredKey != UINT64_MAX) {
+    UINT64 releaseKey = (acquiredKey == 0) ? 1 : 0;
+    keyedMutex->ReleaseSync(releaseKey);
   }
 }
 
@@ -334,83 +371,3 @@ void OpenVRPresenter::Cleanup() {
   device_.Reset();
 }
 
-void OpenVRPresenter::ScheduleTestTextureAfterDelay(UINT width, UINT height, DXGI_FORMAT format, int delay_ms) {
-  // Fire-and-forget background task
-  std::thread([this, width, height, format, delay_ms]() {
-    try {
-      std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
-      // Double-check state before submitting
-      {
-        std::lock_guard<std::mutex> lock(mtx_);
-        if (!openvr_initialized_ || !overlay_created_ || !device_ || !context_) {
-          std::cout << "[OpenVR] Test texture skipped: not initialized anymore\n";
-          return;
-        }
-      }
-      std::cout << "[OpenVR] Submitting timed test red texture...\n";
-      SubmitSolidColorTexture(width, height, format, 0xFF0000FFu); // RGBA red (we'll clear via RTV anyway)
-    } catch (...) {
-      // Swallow exceptions in background thread to avoid crashes
-    }
-  }).detach();
-}
-
-void OpenVRPresenter::SubmitSolidColorTexture(UINT width, UINT height, DXGI_FORMAT format, uint32_t rgba) {
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!device_ || !context_ || !openvr_initialized_ || !overlay_created_) {
-    std::cerr << "[OpenVR] ERROR: SubmitSolidColorTexture: Not properly initialized\n";
-    return;
-  }
-
-  // Create a render-target-capable texture
-  D3D11_TEXTURE2D_DESC desc = {};
-  desc.Width = width;
-  desc.Height = height;
-  desc.MipLevels = 1;
-  desc.ArraySize = 1;
-  desc.Format = format;
-  desc.SampleDesc.Count = 1;
-  desc.SampleDesc.Quality = 0;
-  desc.Usage = D3D11_USAGE_DEFAULT;
-  desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-  desc.CPUAccessFlags = 0;
-  desc.MiscFlags = 0;
-
-  ComPtr<ID3D11Texture2D> tex;
-  HRESULT hr = device_->CreateTexture2D(&desc, nullptr, tex.GetAddressOf());
-  if (FAILED(hr)) {
-    std::cerr << "[OpenVR] ERROR: SubmitSolidColorTexture: CreateTexture2D failed, hr=0x" << std::hex << hr << std::dec << "\n";
-    return;
-  }
-
-  // Create RTV and clear to red
-  ComPtr<ID3D11RenderTargetView> rtv;
-  hr = device_->CreateRenderTargetView(tex.Get(), nullptr, rtv.GetAddressOf());
-  if (FAILED(hr)) {
-    std::cerr << "[OpenVR] ERROR: SubmitSolidColorTexture: CreateRenderTargetView failed, hr=0x" << std::hex << hr << std::dec << "\n";
-    return;
-  }
-
-  const float red[4] = {1.0f, 0.0f, 0.0f, 1.0f};
-  context_->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
-  D3D11_VIEWPORT vp{};
-  vp.TopLeftX = 0.0f;
-  vp.TopLeftY = 0.0f;
-  vp.Width = static_cast<float>(width);
-  vp.Height = static_cast<float>(height);
-  vp.MinDepth = 0.0f;
-  vp.MaxDepth = 1.0f;
-  context_->RSSetViewports(1, &vp);
-  context_->ClearRenderTargetView(rtv.Get(), red);
-
-  // Submit
-  last_submitted_texture_ = tex;
-  vr::Texture_t eyeTexture = { (void*)tex.Get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
-  vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
-  if (overlayError != vr::VROverlayError_None) {
-    std::cerr << "[OpenVR] ERROR: SubmitSolidColorTexture: SetOverlayTexture failed: "
-              << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
-  } else {
-    std::cout << "[OpenVR] SubmitSolidColorTexture: Red texture submitted successfully\n";
-  }
-}

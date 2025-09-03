@@ -149,29 +149,34 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   std::signal(SIGTERM, SignalHandler);
   SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
-  // Create a simple window
-  std::cout << "[CEF Demo] Creating window...\n";
-  const wchar_t kClassName[] = L"CEFOffscreenDemo";
-  WNDCLASSEXW wcex = { sizeof(WNDCLASSEXW) };
-  wcex.style = CS_HREDRAW | CS_VREDRAW;
-  wcex.lpfnWndProc = WndProc;
-  wcex.hInstance = hInstance;
-  wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
-  wcex.lpszClassName = kClassName;
-  RegisterClassExW(&wcex);
-
+  // Window / headless setup
   int width = 1280;
   int height = 720;
-  HWND hWnd = CreateWindowExW(0, kClassName, L"CEF Offscreen Accelerated Paint", WS_OVERLAPPEDWINDOW,
-                              CW_USEDEFAULT, 0, width, height, nullptr, nullptr, hInstance, nullptr);
-  if (!hWnd) {
-    std::cerr << "[CEF Demo] ERROR: Failed to create window!\n";
-    return -1;
+  HWND hWnd = nullptr;
+  if constexpr (!ENABLE_VR_MODE) {
+    std::cout << "[CEF Demo] Creating window...\n";
+    const wchar_t kClassName[] = L"CEFOffscreenDemo";
+    WNDCLASSEXW wcex = { sizeof(WNDCLASSEXW) };
+    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    wcex.lpfnWndProc = WndProc;
+    wcex.hInstance = hInstance;
+    wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wcex.lpszClassName = kClassName;
+    RegisterClassExW(&wcex);
+
+    hWnd = CreateWindowExW(0, kClassName, L"CEF Offscreen Accelerated Paint", WS_OVERLAPPEDWINDOW,
+                           CW_USEDEFAULT, 0, width, height, nullptr, nullptr, hInstance, nullptr);
+    if (!hWnd) {
+      std::cerr << "[CEF Demo] ERROR: Failed to create window!\n";
+      return -1;
+    }
+    g_main_window = hWnd;
+    std::cout << "[CEF Demo] Window created successfully\n";
+    ShowWindow(hWnd, nCmdShow);
+    UpdateWindow(hWnd);
+  } else {
+    std::cout << "[CEF Demo] VR mode: running headless (no Win32 window)\n";
   }
-  g_main_window = hWnd;
-  std::cout << "[CEF Demo] Window created successfully\n";
-  ShowWindow(hWnd, nCmdShow);
-  UpdateWindow(hWnd);
 
   // CEF settings
   std::cout << "[CEF Demo] Configuring CEF settings...\n";
@@ -240,7 +245,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
   // Create browser windowless
   CefWindowInfo wi;
-  wi.SetAsWindowless(hWnd);
+  if constexpr (ENABLE_VR_MODE) {
+    wi.SetAsWindowless(nullptr);
+  } else {
+    wi.SetAsWindowless(hWnd);
+  }
   wi.windowless_rendering_enabled = true;
   wi.shared_texture_enabled = true;
   
@@ -267,7 +276,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   std::cout << "[CEF Demo] Creating browser client...\n";
   if constexpr (ENABLE_VR_MODE) {
     auto vr_presenter = std::static_pointer_cast<OpenVRPresenter>(presenter);
-    g_client = new OffscreenClient(hWnd, vr_presenter, width, height, 1.0f);
+    g_client = new OffscreenClient(nullptr, vr_presenter, width, height, 1.0f);
   } else {
     auto d3d_presenter = std::static_pointer_cast<D3DPresenter>(presenter);
     g_client = new OffscreenClient(hWnd, d3d_presenter, width, height, 1.0f);

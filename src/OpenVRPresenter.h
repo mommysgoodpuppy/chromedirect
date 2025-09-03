@@ -5,7 +5,6 @@
 #include <d3d11_1.h>
 #include <wrl/client.h>
 #include <mutex>
-#include <atomic>
 #include <openvr.h>
 
 class OpenVRPresenter {
@@ -25,10 +24,6 @@ private:
   bool CreateD3DDevice();
   void Cleanup();
 
-  // Schedules a timed submission of a solid color texture to the overlay for debugging.
-  void ScheduleTestTextureAfterDelay(UINT width, UINT height, DXGI_FORMAT format, int delay_ms);
-  void SubmitSolidColorTexture(UINT width, UINT height, DXGI_FORMAT format, uint32_t rgba);
-
   Microsoft::WRL::ComPtr<ID3D11Device> device_;
   Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
   
@@ -45,7 +40,4 @@ private:
 
   // Keep a reference to the most recently submitted texture to ensure lifetime across frames.
   Microsoft::WRL::ComPtr<ID3D11Texture2D> last_submitted_texture_;
-
-  // Ensure we only schedule the test texture once.
-  std::atomic<bool> test_texture_timer_started_{false};
 };
