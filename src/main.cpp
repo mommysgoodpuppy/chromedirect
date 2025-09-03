@@ -187,28 +187,21 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   settings.log_severity = LOGSEVERITY_VERBOSE;
   settings.external_message_pump = false; // use CEF's built-in message loop
   
-  // Set explicit paths to help CEF find resources
-  std::string bin_dir = "C:/GIT/chromedirect/build/bin";
-  CefString(&settings.resources_dir_path).FromASCII(bin_dir.c_str());
-  CefString(&settings.locales_dir_path).FromASCII((bin_dir + "/locales").c_str());
-  CefString(&settings.cache_path).FromASCII((bin_dir + "/cache").c_str());
-  CefString(&settings.root_cache_path).FromASCII((bin_dir + "/cache").c_str());
-  CefString(&settings.browser_subprocess_path).FromASCII((bin_dir + "/chromedirect_demo.exe").c_str());
+  // Set explicit paths relative to the executable directory so the app runs from any build folder
+  wchar_t exePathW[MAX_PATH] = {0};
+  GetModuleFileNameW(nullptr, exePathW, MAX_PATH);
+  std::wstring exePath(exePathW);
+  size_t slash = exePath.find_last_of(L"/\\");
+  std::wstring binDirW = (slash == std::wstring::npos) ? L"." : exePath.substr(0, slash);
+  CefString(&settings.resources_dir_path).FromWString(binDirW);
+  CefString(&settings.locales_dir_path).FromWString(binDirW + L"/locales");
+  CefString(&settings.cache_path).FromWString(binDirW + L"/cache");
+  CefString(&settings.root_cache_path).FromWString(binDirW + L"/cache");
+  CefString(&settings.browser_subprocess_path).FromWString(binDirW + L"/chromedirect_demo.exe");
   
   // Enable detailed logging to file
-  CefString(&settings.log_file).FromASCII((bin_dir + "/cef_detailed.log").c_str());
-  settings.log_severity = LOGSEVERITY_VERBOSE;
-
-  // Force GPU/ANGLE D3D11
-  // (Using default helper path from CEF cmake integration)
-
-  // Command line switches
-  CefRefPtr<CefCommandLine> command_line = CefCommandLine::CreateCommandLine();
-  command_line->InitFromString(GetCommandLineW());
-  command_line->AppendSwitch("enable-gpu");
-  command_line->AppendSwitchWithValue("use-angle", "d3d11");
-  command_line->AppendSwitch("disable-gpu-sandbox");
-  command_line->AppendSwitch("off-screen-rendering-enabled");
+  CefString(&settings.log_file).FromWString(binDirW + L"/cef_detailed.log");
+  // Force GPU/ANGLE D3D11 switches are applied in SimpleApp::OnBeforeCommandLineProcessing
 
   // Initialize CEF before creating presenters
   std::cout << "[CEF Demo] Initializing CEF...\n";

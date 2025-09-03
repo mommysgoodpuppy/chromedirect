@@ -4,6 +4,14 @@
 #include <iostream>
 #include <dxgi.h>
 
+/*
+ Minimal OpenVR overlay presenter for CEF OSR.
+ Highlights:
+ - Creates a D3D11 device; interops with CEF shared textures
+ - Configures overlay (width = scale_, texture bounds, transform)
+ - Submits via DXGI legacy shared handle
+ - Drains overlay events and paces with WaitFrameSync
+*/
 using Microsoft::WRL::ComPtr;
 
 static void ThrowIfFailed(HRESULT hr) {
@@ -124,7 +132,7 @@ bool OpenVRPresenter::InitializeOpenVR() {
     // Make overlay visible
     vr::VROverlay()->ShowOverlay(overlay_handle_);
     
-    std::cout << "[OpenVR] Overlay configured: 2.0m width, bounds set, visible\n";
+    std::cout << "[OpenVR] Overlay configured: width=" << scale_ << "m, bounds set, visible\n";
     
     // Position it in front of the user
     vr::HmdMatrix34_t transform = {};
