@@ -162,8 +162,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
   // Window / headless setup and runtime options
-  int width = 1280;
-  int height = 720;
+  int width = 4000;   // overlay/output width
+  int height = 2000;  // overlay/output height
+  int cef_width = -1;  // browser/input width (defaults to overlay width)
+  int cef_height = -1; // browser/input height (can default to half for panorama)
   float scale_m = 1.0f;
   std::string overlay_key = "cef.web.overlay";
   std::string start_url = "https://www.google.com";
@@ -172,6 +174,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   bool shader_panorama = false;
   float fov_deg = 90.0f; // total FOV; half used in shader
   int shader_debug = 0; // 0=normal,1=passthrough,2=uv
+  bool warp_follow_head = false;
 
   if (app_cmd->HasSwitch("vr")) {
     const std::string v = app_cmd->GetSwitchValue("vr");
@@ -184,6 +187,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   }
   if (app_cmd->HasSwitch("height")) {
     height = std::max(64, atoi(app_cmd->GetSwitchValue("height").ToString().c_str()));
+  }
+  if (app_cmd->HasSwitch("cef-width")) {
+    cef_width = std::max(64, atoi(app_cmd->GetSwitchValue("cef-width").ToString().c_str()));
+  }
+  if (app_cmd->HasSwitch("cef-height")) {
+    cef_height = std::max(64, atoi(app_cmd->GetSwitchValue("cef-height").ToString().c_str()));
   }
   if (app_cmd->HasSwitch("scale")) {
     scale_m = std::max(0.01f, static_cast<float>(atof(app_cmd->GetSwitchValue("scale").ToString().c_str())));
@@ -212,7 +221,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     const std::string v = app_cmd->GetSwitchValue("shader-debug");
     if (v == "passthrough" || v == "1") shader_debug = 1;
     else if (v == "uv" || v == "2") shader_debug = 2;
+    else if (v == "solid" || v == "3") shader_debug = 3;
+    else if (v == "repack" || v == "4") shader_debug = 4;
     else shader_debug = 0;
+  }
+  if (app_cmd->HasSwitch("warp-follow-head")) {
+    const std::string v = app_cmd->GetSwitchValue("warp-follow-head");
+    warp_follow_head = (v.empty() || v == "1" || v == "true");
   }
   HWND hWnd = nullptr;
   if (!g_enable_vr_mode) {
@@ -240,6 +255,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     std::cout << "[CEF Demo] VR mode: running headless (no Win32 window)\n";
   }
 
+  // If not explicitly specified, pick CEF input size based on overlay/shader settings
+  if (cef_width < 0) cef_width = width;
+  if (cef_height < 0) {
+    // For shader panorama, prefer 2:1 input so each SBS half is square
+    cef_height = shader_panorama ? std::max(64, height / 2) : height;
+  }
+
   // CEF settings
   std::cout << "[CEF Demo] Configuring CEF settings...\n";
   CefSettings settings;
@@ -247,6 +269,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   settings.no_sandbox = true; // disable GPU sandbox path conflicts
   settings.log_severity = LOGSEVERITY_VERBOSE;
   settings.external_message_pump = false; // use CEF's built-in message loop
+  settings.background_color = CefColorSetARGB(0, 0, 0, 0);
   
   // Set explicit paths relative to the executable directory so the app runs from any build folder
   wchar_t exePathW[MAX_PATH] = {0};
@@ -297,7 +320,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         vr_presenter->SetShaderDebugMode(shader_debug);
         std::cout << "[CEF Demo] Shader debug mode=" << shader_debug << " (1=passthrough,2=uv)\n";
       }
+      vr_presenter->SetWarpFollowHead(warp_follow_head);
+      if (warp_follow_head) std::cout << "[CEF Demo] Warp follows head yaw enabled\n";
     }
+    // Alpha handling defaults for AR: premultiplied on, don't ignore texture alpha
+    vr_presenter->SetPremultipliedAlpha(true);
+    vr_presenter->SetIgnoreTextureAlpha(false);
     presenter = vr_presenter;
   } else {
     std::cout << "[CEF Demo] Initializing D3D presenter...\n";
@@ -329,9 +357,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
   CefBrowserSettings bs;
   bs.windowless_frame_rate = target_fps;
+  bs.background_color = CefColorSetARGB(0, 0, 0, 0);
 
   std::cout << "[CEF Demo] Creating browser client...\n";
-  g_client = new OffscreenClient(g_enable_vr_mode ? nullptr : hWnd, presenter, width, height, 1.0f, target_fps);
+  std::cout << "[CEF Demo] Browser/input size: " << cef_width << "x" << cef_height << ", overlay/output: " << width << "x" << height << "\n";
+  g_client = new OffscreenClient(g_enable_vr_mode ? nullptr : hWnd, presenter, cef_width, cef_height, 1.0f, target_fps);
   CefRefPtr<CefClient> base_client = g_client;
 
   std::cout << "[CEF Demo] Creating browser with URL: " << start_url << "\n";

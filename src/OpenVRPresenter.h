@@ -32,10 +32,13 @@ public:
 
   // Configure overlay flags
   void SetStereoPanorama(bool enable);
+  void SetPremultipliedAlpha(bool enable);
+  void SetIgnoreTextureAlpha(bool enable);
 
   // Configure shader-based panorama transform (from SBS input)
   // fovHalfRadians: half FOV in radians for the projection.
   void ConfigurePanoramaShader(bool enable, float fovHalfRadians, bool inputSideBySide = true);
+  void SetWarpFollowHead(bool enable);
   void SetShaderDebugMode(int mode); // 0=normal,1=passthrough,2=uv
 
   // Get the D3D11 device for CEF compatibility
@@ -44,7 +47,7 @@ public:
 private:
   bool InitializeOpenVR();
   bool CreateD3DDevice();
-  bool EnsureShaderPipeline(UINT width, UINT height);
+  bool EnsureShaderPipeline(UINT outWidth, UINT outHeight);
   void Cleanup();
 
   // D3D11 device/context used for interop and copies.
@@ -76,6 +79,7 @@ private:
   bool shader_enabled_ = false;
   bool shader_input_sbs_ = true;
   float fov_half_radians_ = 0.78539816339f; // ~45 deg
+  bool warp_follow_head_ = false;
   Microsoft::WRL::ComPtr<ID3D11VertexShader> vs_;
   Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_;
   Microsoft::WRL::ComPtr<ID3D11Buffer> cb_params_;

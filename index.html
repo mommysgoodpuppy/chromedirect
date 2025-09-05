@@ -5,7 +5,7 @@
     <script src="https://unpkg.com/iwer@latest/build/iwer.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; }
+        body { margin: 0; overflow: hidden; background: transparent; }
         canvas { width: 100%; height: 100%; }
         #xr-button {
             position: absolute;
@@ -26,16 +26,30 @@
             referenceSpaceType: 'local-floor'
         });
         xrDevice.installRuntime();
-        
+        (() => {
+            const Orig = window.XRWebGLLayer;
+            if (!Orig) return; // IWER not installed yet
+            window.XRWebGLLayer = class XRWebGLLayerSS extends Orig {
+                constructor(session, gl, opts = {}) {
+                const wants = (opts.framebufferScaleFactor ?? 1);
+                // clamp to something sane; going too high can exceed GPU limits
+                const supersample = 2;
+                opts.framebufferScaleFactor = 2
+                super(session, gl, opts);
+                }
+            };
+        })();
+                
         // Configure stereo rendering
         xrDevice.stereoEnabled = true;
         xrDevice.ipd = 0.064;
 
         // Three.js setup
         const scene = new THREE.Scene();
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.xr.enabled = true;
+        renderer.setClearColor(0x000000, 0);
         document.body.appendChild(renderer.domElement);
 
         // Create proper camera configuration
@@ -61,7 +75,10 @@
 
         // XR Session handling (auto-start capable via IWER polyfill)
         const statusEl = document.getElementById('status');
-        const XR_RENDER_SCALE = 1.0;
+        const XR_RENDER_SCALE = 10.0; // default; can override via ?scale=1.5
+        const params = new URLSearchParams(location.search);
+        const URL_SCALE = params.has('scale') ? Math.max(0.25, Math.min(3.0, parseFloat(params.get('scale')) || XR_RENDER_SCALE)) : XR_RENDER_SCALE;
+        const USE_NATIVE_SCALE = params.get('nativeScale') === '1' || params.get('nativeScale') === 'true';
 
         function xrRenderLoop(timestamp, frame) {
             cube.rotation.y += 0.01;
@@ -94,8 +111,31 @@
                     renderer.setAnimationLoop(null);
                 });
 
-                if (renderer.xr.setFramebufferScaleFactor) {
-                    renderer.xr.setFramebufferScaleFactor(XR_RENDER_SCALE);
+                // Prefer creating XRWebGLLayer with explicit framebufferScaleFactor
+                const gl = renderer.getContext();
+                let appliedScale = URL_SCALE;
+                if (typeof XRWebGLLayer !== 'undefined') {
+                    try {
+                        /* if (USE_NATIVE_SCALE && typeof XRWebGLLayer.getNativeFramebufferScaleFactor === 'function') {
+                            const nativeScale = XRWebGLLayer.getNativeFramebufferScaleFactor(session);
+                            if (nativeScale && isFinite(nativeScale)) {
+                                appliedScale = nativeScale;
+                            }
+                        } */
+                        const layerInit = { framebufferScaleFactor: appliedScale, alpha: true, antialias: true, depth: true, stencil: false };
+                        const baseLayer = new XRWebGLLayer(session, gl, layerInit);
+                        session.updateRenderState({ baseLayer });
+                        statusEl.textContent = `XR Session Active (scale=${appliedScale.toFixed(2)})`;
+                    } catch (e) {
+                        console.warn('XRWebGLLayer setup failed, falling back to setFramebufferScaleFactor:', e);
+                        if (renderer.xr.setFramebufferScaleFactor) {
+                            renderer.xr.setFramebufferScaleFactor(appliedScale);
+                            statusEl.textContent = `XR Session Active (fallback scale=${appliedScale.toFixed(2)})`;
+                        }
+                    }
+                } else if (renderer.xr.setFramebufferScaleFactor) {
+                    renderer.xr.setFramebufferScaleFactor(appliedScale);
+                    statusEl.textContent = `XR Session Active (fallback scale=${appliedScale.toFixed(2)})`;
                 }
                 const maybePromise = renderer.xr.setSession(session);
                 if (maybePromise && typeof maybePromise.then === 'function') {

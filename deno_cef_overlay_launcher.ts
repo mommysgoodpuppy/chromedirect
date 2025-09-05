@@ -25,9 +25,9 @@ type Args = {
 function parseArgs(): Args {
   const defaults: Args = {
     key: "cef.web.overlay",
-    width: 4000,
-    height: 2000,
-    scale: 1.0,
+    width: 4096,
+    height: 4096,
+    scale: 3.0,
     url: "http://127.0.0.1:5501/index.html",
     exe: Deno.build.os === "windows" ? ".\\build\\bin\\chromedirect_demo.exe" : "./build/bin/chromedirect_demo",
   };

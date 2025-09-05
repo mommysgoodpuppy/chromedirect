@@ -176,6 +176,23 @@ void OpenVRPresenter::ConfigurePanoramaShader(bool enable, float fovHalfRadians,
   shader_input_sbs_ = inputSideBySide;
 }
 
+void OpenVRPresenter::SetWarpFollowHead(bool enable) {
+  std::lock_guard<std::mutex> lock(mtx_);
+  warp_follow_head_ = enable;
+}
+
+void OpenVRPresenter::SetPremultipliedAlpha(bool enable) {
+  std::lock_guard<std::mutex> lock(mtx_);
+  if (!overlay_created_) return;
+  vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_IsPremultiplied, enable);
+}
+
+void OpenVRPresenter::SetIgnoreTextureAlpha(bool enable) {
+  std::lock_guard<std::mutex> lock(mtx_);
+  if (!overlay_created_) return;
+  vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_IgnoreTextureAlpha, enable);
+}
+
 void OpenVRPresenter::SetShaderDebugMode(int mode) {
   std::lock_guard<std::mutex> lock(mtx_);
   shader_debug_mode_ = mode;
@@ -183,10 +200,14 @@ void OpenVRPresenter::SetShaderDebugMode(int mode) {
 
 static const char* kVS_Src = R"HLSL(
 struct VSOut { float4 pos:SV_Position; float2 uv:TEXCOORD0; };
+static const float2 kPos[4] = { float2(-1,-1), float2(1,-1), float2(-1,1), float2(1,1) };
+static const float2 kUV[4]  = { float2(0,0),   float2(1,0),   float2(0,1),  float2(1,1) };
 VSOut main(uint vid:SV_VertexID){
-  float2 pos[4] = { float2(-1,-1), float2(1,-1), float2(-1,1), float2(1,1) };
-  float2 uv[4]  = { float2(0,0),  float2(1,0),  float2(0,1),  float2(1,1) };
-  VSOut o; o.pos=float4(pos[vid],0,1); o.uv=float2(uv[vid].x, 1.0 - uv[vid].y); return o;
+  VSOut o;
+  o.pos = float4(kPos[vid], 0.0f, 1.0f);
+  // Flip V to match original shader's input convention
+  o.uv = float2(kUV[vid].x, 1.0f - kUV[vid].y);
+  return o;
 }
 )HLSL";
 
@@ -195,10 +216,11 @@ Texture2D srcTex : register(t0);
 SamplerState samp0 : register(s0);
 
 cbuffer Params : register(b0) {
-  float4x4 lookRotation; // not used yet; keep for parity
+  float4x4 lookRotation; // view rotation
   float halfFOVInRadians;
   float inputIsSBS; // 1.0 = SBS, 0.0 = TB (not used yet)
-  float debugMode; // 0=normal,1=passthrough,2=uv,3=solid
+  float debugMode; // 0=normal,1=passthrough,2=uv,3=solid,4=repackSBS2TB
+  float applyRotation; // 0=no, 1=yes
 }
 
 static const float PI = 3.141592;
@@ -207,7 +229,8 @@ static const float QUARTER_PI = 0.25 * PI;
 
 struct PSIn { float4 pos:SV_Position; float2 uv:TEXCOORD0; };
 float4 main(PSIn i) : SV_Target {
-  float2 uv = i.uv; // 0..1
+  // VS already provided normalized UV with V flipped
+  float2 uv = i.uv;
   if (debugMode >= 1.0) {
     if (debugMode < 2.0) {
       float4 cc = srcTex.Sample(samp0, uv);
@@ -215,12 +238,27 @@ float4 main(PSIn i) : SV_Target {
       return cc; // passthrough
     } else if (debugMode < 3.0) {
       return float4(uv, 0.0, 1.0); // visualize UVs
-    } else {
+    } else if (debugMode < 4.0) {
       return float4(0.0, 1.0, 0.0, 1.0); // solid green
+    } else {
+      // Repack SBS -> Top/Bottom without warping (crisp diagnostic)
+      float2 eyeUV = uv;
+      // Map output top/bottom halves to left/right input halves
+      if (uv.y <= 0.5) {
+        // Top half -> left eye
+        eyeUV.y = uv.y * 2.0;      // 0..1
+        eyeUV.x = uv.x * 0.5;      // left half
+      } else {
+        // Bottom half -> right eye
+        eyeUV.y = (uv.y - 0.5) * 2.0;
+        eyeUV.x = uv.x * 0.5 + 0.5; // right half
+      }
+      float4 c = srcTex.Sample(samp0, eyeUV);
+      return float4(c.rgb, 1.0);
     }
   }
-  float2 xy_flipped = float2(uv.x, 1.0 - uv.y);
-  float2 xy_normalized = 2.0 * xy_flipped - 1.0;
+  float2 xy = uv;
+  float2 xy_normalized = 2.0 * xy - 1.0;
   float2 xy_angles = xy_normalized * float2(PI, HALF_PI);
 
   float2 xy_eye_angles = xy_angles;
@@ -230,17 +268,20 @@ float4 main(PSIn i) : SV_Target {
 
   float fovScalar = tan(halfFOVInRadians) / tan(QUARTER_PI);
 
+  // Spherical direction
   float3 dir;
   dir.x = sin(xy_angles.x) * cos(xy_eye_angles.y);
   dir.y = sin(xy_eye_angles.y);
   dir.z = cos(xy_angles.x) * cos(xy_eye_angles.y);
 
-  // Optional look rotation; not applied for now
-  // dir = mul(float4(dir,0.0), lookRotation).xyz;
+  // Optional look rotation
+  if (applyRotation > 0.5) {
+    dir = mul(float4(dir,0.0), lookRotation).xyz;
+  }
 
   float projX = (dir.x / abs(dir.z)) / fovScalar;
   float projY = (dir.y / abs(dir.z)) / fovScalar;
-  float2 eyeUV = float2((projX + 1.0) * 0.5, (projY + 1.0) * 0.5);
+  float2 eyeUV = float2((projX + 1.0) * 0.5, 1.0 - ((projY + 1.0) * 0.5));
   eyeUV = saturate(eyeUV);
 
   // Sample from SBS source: left half for top, right half for bottom (per original shader mapping)
@@ -251,13 +292,11 @@ float4 main(PSIn i) : SV_Target {
   }
 
   float4 c = srcTex.Sample(samp0, eyeUV);
-  // Force opaque to avoid fully-transparent OSR textures
-  c.a = 1.0;
   return c;
 }
 )HLSL";
 
-bool OpenVRPresenter::EnsureShaderPipeline(UINT width, UINT height) {
+bool OpenVRPresenter::EnsureShaderPipeline(UINT outWidth, UINT outHeight) {
   if (!shader_enabled_) return false;
   if (!device_ || !context_) return false;
 
@@ -277,18 +316,19 @@ bool OpenVRPresenter::EnsureShaderPipeline(UINT width, UINT height) {
     ThrowIfFailed(device_->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, vs_.GetAddressOf()));
     ThrowIfFailed(device_->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, ps_.GetAddressOf()));
 
-    // Constant buffer
+    // Constant buffer (4x4 matrix + 4 floats -> 80 bytes; align to 16)
     D3D11_BUFFER_DESC cbd = {};
-    cbd.ByteWidth = 64 + 16; // 4x4 matrix (64) + 3 floats padded to 16
+    cbd.ByteWidth = 64 + 16; // 4x4 matrix (64) + 4 floats (packed into 16 due to 16-byte alignment)
     cbd.Usage = D3D11_USAGE_DYNAMIC;
     cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     ThrowIfFailed(device_->CreateBuffer(&cbd, nullptr, cb_params_.GetAddressOf()));
 
-    // Sampler
+    // Sampler (use anisotropic to preserve detail when remapping)
     D3D11_SAMPLER_DESC sd = {};
-    sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sd.Filter = D3D11_FILTER_ANISOTROPIC;
     sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sd.MaxAnisotropy = 16;
     sd.MaxLOD = D3D11_FLOAT32_MAX;
     ThrowIfFailed(device_->CreateSamplerState(&sd, sampler_.GetAddressOf()));
 
@@ -313,15 +353,15 @@ bool OpenVRPresenter::EnsureShaderPipeline(UINT width, UINT height) {
 
   // Ensure shared legacy tex is RTV-capable for direct render
   bool needTex = (!shared_legacy_tex_) ||
-                 (shared_legacy_desc_.Width != width) ||
-                 (shared_legacy_desc_.Height != height);
+                 (shared_legacy_desc_.Width != outWidth) ||
+                 (shared_legacy_desc_.Height != outHeight);
   if (needTex) {
     shared_legacy_tex_.Reset();
     shared_rtv_.Reset();
     shared_legacy_handle_ = nullptr;
     ZeroMemory(&shared_legacy_desc_, sizeof(shared_legacy_desc_));
-    shared_legacy_desc_.Width = width;
-    shared_legacy_desc_.Height = height;
+    shared_legacy_desc_.Width = outWidth;
+    shared_legacy_desc_.Height = outHeight;
     shared_legacy_desc_.MipLevels = 1;
     shared_legacy_desc_.ArraySize = 1;
     shared_legacy_desc_.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -342,8 +382,8 @@ bool OpenVRPresenter::EnsureShaderPipeline(UINT width, UINT height) {
     }
   }
 
-  viewport_.Width = static_cast<float>(width);
-  viewport_.Height = static_cast<float>(height);
+  viewport_.Width = static_cast<float>(outWidth);
+  viewport_.Height = static_cast<float>(outHeight);
   return true;
 }
 
@@ -487,7 +527,8 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
   submitTex->GetDesc(&submitDesc);
 
   if (shader_enabled_) {
-    if (!EnsureShaderPipeline(submitDesc.Width, submitDesc.Height)) {
+    // Ensure output surface matches overlay/presenter target size (width_, height_)
+    if (!EnsureShaderPipeline(static_cast<UINT>(width_), static_cast<UINT>(height_))) {
       std::cerr << "[OpenVR] WARNING: Shader pipeline unavailable; falling back to copy\n";
       shader_enabled_ = false; // disable for subsequent frames
     }
@@ -550,17 +591,41 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     context_->PSSetSamplers(0, 1, sampler_.GetAddressOf());
     context_->PSSetShaderResources(0, 1, srv.GetAddressOf());
 
-    // Update constants
+    // Update constants (supply a yaw-only look rotation from HMD if available)
     D3D11_MAPPED_SUBRESOURCE map = {};
     if (SUCCEEDED(context_->Map(cb_params_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) {
       // Identity lookRotation, then parameters
       float* dst = reinterpret_cast<float*>(map.pData);
-      // 4x4 identity
+      // Default to identity
       for (int r=0;r<4;++r) for (int c=0;c<4;++c) dst[r*4+c] = (r==c)?1.0f:0.0f;
+      // Query HMD pose and generate inverse yaw rotation if enabled
+      bool appliedRotation = false;
+      if (warp_follow_head_ && vr::VRSystem()) {
+        vr::TrackedDevicePose_t poses[vr::k_unMaxTrackedDeviceCount] = {};
+        vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, 0, poses, vr::k_unMaxTrackedDeviceCount);
+        const vr::TrackedDevicePose_t& hmdPose = poses[vr::k_unTrackedDeviceIndex_Hmd];
+        if (hmdPose.bPoseIsValid) {
+          const vr::HmdMatrix34_t& m = hmdPose.mDeviceToAbsoluteTracking;
+          // Extract yaw from 3x3 rotation (assuming column-major from OpenVR)
+          // OpenVR's 3x4 matrix m: rows 0..2, cols 0..3
+          // Forward Z axis components: m[2][0], m[2][2]
+          float forwardX = m.m[0][2];
+          float forwardZ = m.m[2][2];
+          float yaw = atan2f(forwardX, forwardZ);
+          float cy = cosf(-yaw); // inverse yaw
+          float sy = sinf(-yaw);
+          // Row-major 4x4
+          dst[0] = cy;  dst[1] = 0.0f; dst[2] = sy;  dst[3] = 0.0f;
+          dst[4] = 0.0f;dst[5] = 1.0f; dst[6] = 0.0f; dst[7] = 0.0f;
+          dst[8] = -sy; dst[9] = 0.0f; dst[10]= cy;  dst[11]= 0.0f;
+          dst[12]= 0.0f;dst[13]= 0.0f; dst[14]= 0.0f; dst[15]= 1.0f;
+          appliedRotation = true;
+        }
+      }
       dst[16] = fov_half_radians_;
       dst[17] = shader_input_sbs_ ? 1.0f : 0.0f;
       dst[18] = static_cast<float>(shader_debug_mode_);
-      dst[19] = 0.0f;
+      dst[19] = appliedRotation ? 1.0f : 0.0f;
       context_->Unmap(cb_params_.Get(), 0);
     }
     context_->VSSetConstantBuffers(0, 1, cb_params_.GetAddressOf());
