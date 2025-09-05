@@ -37,9 +37,8 @@ public:
 
   // Configure shader-based panorama transform (from SBS input)
   // fovHalfRadians: half FOV in radians for the projection.
-  void ConfigurePanoramaShader(bool enable, float fovHalfRadians, bool inputSideBySide = true);
+  void ConfigurePanoramaShader(bool enable, float fovHalfRadians);
   void SetWarpFollowHead(bool enable);
-  void SetShaderDebugMode(int mode); // 0=normal,1=passthrough,2=uv
 
   // Get the D3D11 device for CEF compatibility
   Microsoft::WRL::ComPtr<ID3D11Device> GetDevice() const override { return device_; }
@@ -77,7 +76,6 @@ private:
 
   // Optional: render into shared_legacy_tex_ via a shader pipeline
   bool shader_enabled_ = false;
-  bool shader_input_sbs_ = true;
   float fov_half_radians_ = 0.78539816339f; // ~45 deg
   bool warp_follow_head_ = false;
   Microsoft::WRL::ComPtr<ID3D11VertexShader> vs_;
@@ -89,5 +87,5 @@ private:
   Microsoft::WRL::ComPtr<ID3D11BlendState> blend_state_;
   Microsoft::WRL::ComPtr<ID3D11DepthStencilState> ds_state_;
   D3D11_VIEWPORT viewport_ = {};
-  int shader_debug_mode_ = 0;
+  // debug fields removed
 };

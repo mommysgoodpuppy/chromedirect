@@ -173,7 +173,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   bool stereo_panorama_flag = false;
   bool shader_panorama = false;
   float fov_deg = 90.0f; // total FOV; half used in shader
-  int shader_debug = 0; // 0=normal,1=passthrough,2=uv
   bool warp_follow_head = false;
 
   if (app_cmd->HasSwitch("vr")) {
@@ -217,14 +216,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   if (app_cmd->HasSwitch("fov-deg")) {
     fov_deg = std::max(1.0f, static_cast<float>(atof(app_cmd->GetSwitchValue("fov-deg").ToString().c_str())));
   }
-  if (app_cmd->HasSwitch("shader-debug")) {
-    const std::string v = app_cmd->GetSwitchValue("shader-debug");
-    if (v == "passthrough" || v == "1") shader_debug = 1;
-    else if (v == "uv" || v == "2") shader_debug = 2;
-    else if (v == "solid" || v == "3") shader_debug = 3;
-    else if (v == "repack" || v == "4") shader_debug = 4;
-    else shader_debug = 0;
-  }
   if (app_cmd->HasSwitch("warp-follow-head")) {
     const std::string v = app_cmd->GetSwitchValue("warp-follow-head");
     warp_follow_head = (v.empty() || v == "1" || v == "true");
@@ -256,11 +247,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   }
 
   // If not explicitly specified, pick CEF input size based on overlay/shader settings
-  if (cef_width < 0) cef_width = width;
+  if (cef_width < 0) {
+    cef_width = width / 2;
+    //cef_width = shader_panorama ? std::max(64, width * 2) : width;
+  };
   if (cef_height < 0) {
-    // For shader panorama, prefer 2:1 input so each SBS half is square
-    cef_height = shader_panorama ? std::max(64, height / 2) : height;
-  }
+    //cef_height = height
+    cef_height = shader_panorama ? std::max(64, height / 4) : height;
+  };
 
   // CEF settings
   std::cout << "[CEF Demo] Configuring CEF settings...\n";
@@ -314,12 +308,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     }
     if (shader_panorama) {
       float fov_half_rad = (fov_deg * 0.5f) * 3.1415926535f / 180.0f;
-      vr_presenter->ConfigurePanoramaShader(true, fov_half_rad, true /*SBS*/);
+      vr_presenter->ConfigurePanoramaShader(true, fov_half_rad);
       std::cout << "[CEF Demo] Shader panorama enabled (FOV half rad=" << fov_half_rad << ")\n";
-      if (shader_debug != 0) {
-        vr_presenter->SetShaderDebugMode(shader_debug);
-        std::cout << "[CEF Demo] Shader debug mode=" << shader_debug << " (1=passthrough,2=uv)\n";
-      }
       vr_presenter->SetWarpFollowHead(warp_follow_head);
       if (warp_follow_head) std::cout << "[CEF Demo] Warp follows head yaw enabled\n";
     }

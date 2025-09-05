@@ -34,6 +34,10 @@
         // Three.js setup
         const scene = new THREE.Scene();
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        // Improve perceived AA by matching device pixel ratio (override with ?dpr=1)
+        const dprParam = new URLSearchParams(location.search).get('dpr');
+        const DPR = dprParam ? Math.max(1, Math.min(4, parseFloat(dprParam))) : window.devicePixelRatio || 1;
+        renderer.setPixelRatio(DPR);
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.xr.enabled = true;
         renderer.setClearColor(0x000000, 0);
@@ -62,7 +66,6 @@
 
         // XR Session handling (auto-start capable via IWER polyfill)
         const statusEl = document.getElementById('status');
-        const XR_RENDER_SCALE = 1.0; // default; can override via ?scale=1.5
         const params = new URLSearchParams(location.search);
 
 
@@ -97,7 +100,20 @@
                     renderer.setAnimationLoop(null);
                 });
 
-
+                // Prefer an explicit XRWebGLLayer with antialias enabled
+                try {
+                    const gl = renderer.getContext();
+                    if (gl.makeXRCompatible) await gl.makeXRCompatible();
+                    const baseLayer = new XRWebGLLayer(session, gl, {
+                        antialias: true,
+                        alpha: false,
+                        depth: false,
+                        stencil: false
+                    });
+                    session.updateRenderState({ baseLayer });
+                } catch (e) {
+                    console.warn('XRWebGLLayer AA setup failed (falling back):', e);
+                }
 
                 const maybePromise = renderer.xr.setSession(session);
                 if (maybePromise && typeof maybePromise.then === 'function') {

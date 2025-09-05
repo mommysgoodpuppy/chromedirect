@@ -169,11 +169,10 @@ void OpenVRPresenter::SetStereoPanorama(bool enable) {
   if (enable) vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_Panorama, false);
 }
 
-void OpenVRPresenter::ConfigurePanoramaShader(bool enable, float fovHalfRadians, bool inputSideBySide) {
+void OpenVRPresenter::ConfigurePanoramaShader(bool enable, float fovHalfRadians) {
   std::lock_guard<std::mutex> lock(mtx_);
   shader_enabled_ = enable;
   fov_half_radians_ = fovHalfRadians;
-  shader_input_sbs_ = inputSideBySide;
 }
 
 void OpenVRPresenter::SetWarpFollowHead(bool enable) {
@@ -193,10 +192,6 @@ void OpenVRPresenter::SetIgnoreTextureAlpha(bool enable) {
   vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_IgnoreTextureAlpha, enable);
 }
 
-void OpenVRPresenter::SetShaderDebugMode(int mode) {
-  std::lock_guard<std::mutex> lock(mtx_);
-  shader_debug_mode_ = mode;
-}
 
 static const char* kVS_Src = R"HLSL(
 struct VSOut { float4 pos:SV_Position; float2 uv:TEXCOORD0; };
@@ -218,9 +213,8 @@ SamplerState samp0 : register(s0);
 cbuffer Params : register(b0) {
   float4x4 lookRotation; // view rotation
   float halfFOVInRadians;
-  float inputIsSBS; // 1.0 = SBS, 0.0 = TB (not used yet)
-  float debugMode; // 0=normal,1=passthrough,2=uv,3=solid,4=repackSBS2TB
   float applyRotation; // 0=no, 1=yes
+  float2 pad;
 }
 
 static const float PI = 3.141592;
@@ -231,32 +225,7 @@ struct PSIn { float4 pos:SV_Position; float2 uv:TEXCOORD0; };
 float4 main(PSIn i) : SV_Target {
   // VS already provided normalized UV with V flipped
   float2 uv = i.uv;
-  if (debugMode >= 1.0) {
-    if (debugMode < 2.0) {
-      float4 cc = srcTex.Sample(samp0, uv);
-      cc.a = 1.0;
-      return cc; // passthrough
-    } else if (debugMode < 3.0) {
-      return float4(uv, 0.0, 1.0); // visualize UVs
-    } else if (debugMode < 4.0) {
-      return float4(0.0, 1.0, 0.0, 1.0); // solid green
-    } else {
-      // Repack SBS -> Top/Bottom without warping (crisp diagnostic)
-      float2 eyeUV = uv;
-      // Map output top/bottom halves to left/right input halves
-      if (uv.y <= 0.5) {
-        // Top half -> left eye
-        eyeUV.y = uv.y * 2.0;      // 0..1
-        eyeUV.x = uv.x * 0.5;      // left half
-      } else {
-        // Bottom half -> right eye
-        eyeUV.y = (uv.y - 0.5) * 2.0;
-        eyeUV.x = uv.x * 0.5 + 0.5; // right half
-      }
-      float4 c = srcTex.Sample(samp0, eyeUV);
-      return float4(c.rgb, 1.0);
-    }
-  }
+
   float2 xy = uv;
   float2 xy_normalized = 2.0 * xy - 1.0;
   float2 xy_angles = xy_normalized * float2(PI, HALF_PI);
@@ -281,20 +250,17 @@ float4 main(PSIn i) : SV_Target {
 
   float projX = (dir.x / abs(dir.z)) / fovScalar;
   float projY = (dir.y / abs(dir.z)) / fovScalar;
-  // Map +Y (up) to larger V values in equirect input? For D3D textures, V=0 is top. 
-  // If the result appears upside down, use non-inverted V mapping:
   float2 eyeUV = float2((projX + 1.0) * 0.5, (projY + 1.0) * 0.5);
   eyeUV = saturate(eyeUV);
 
-  // Sample from SBS source: left half for top, right half for bottom (per original shader mapping)
+  // Sample from SBS source: left half for top, right half for bottom
   if (renderTopHalf) {
     eyeUV.x = eyeUV.x * 0.5; // left half
   } else {
     eyeUV.x = eyeUV.x * 0.5 + 0.5; // right half
   }
 
-  float4 c = srcTex.Sample(samp0, eyeUV);
-  return c;
+  return srcTex.Sample(samp0, eyeUV);
 }
 )HLSL";
 
@@ -625,9 +591,9 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
         }
       }
       dst[16] = fov_half_radians_;
-      dst[17] = shader_input_sbs_ ? 1.0f : 0.0f;
-      dst[18] = static_cast<float>(shader_debug_mode_);
-      dst[19] = appliedRotation ? 1.0f : 0.0f;
+      dst[17] = appliedRotation ? 1.0f : 0.0f; // applyRotation flag
+      dst[18] = 0.0f;
+      dst[19] = 0.0f;
       context_->Unmap(cb_params_.Get(), 0);
     }
     context_->VSSetConstantBuffers(0, 1, cb_params_.GetAddressOf());
