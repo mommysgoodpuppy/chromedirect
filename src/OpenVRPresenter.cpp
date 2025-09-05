@@ -281,7 +281,9 @@ float4 main(PSIn i) : SV_Target {
 
   float projX = (dir.x / abs(dir.z)) / fovScalar;
   float projY = (dir.y / abs(dir.z)) / fovScalar;
-  float2 eyeUV = float2((projX + 1.0) * 0.5, 1.0 - ((projY + 1.0) * 0.5));
+  // Map +Y (up) to larger V values in equirect input? For D3D textures, V=0 is top. 
+  // If the result appears upside down, use non-inverted V mapping:
+  float2 eyeUV = float2((projX + 1.0) * 0.5, (projY + 1.0) * 0.5);
   eyeUV = saturate(eyeUV);
 
   // Sample from SBS source: left half for top, right half for bottom (per original shader mapping)
