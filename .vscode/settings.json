@@ -79,5 +79,7 @@
     "xtr1common": "cpp",
     "chrono": "cpp",
     "forward_list": "cpp"
-  }
+  },
+  "deno.enable": true,
+  "liveServer.settings.port": 5501
 }

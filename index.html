@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebXR IWER Stereo Demo</title>
+    <script src="https://unpkg.com/iwer@latest/build/iwer.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { width: 100%; height: 100%; }
+        #xr-button {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 12px 24px;
+            z-index: 999;
+        }
+    </style>
+</head>
+<body>
+    <button id="xr-button">Enter XR</button>
+    <div id="status" style="position:absolute;top:60px;left:50%;transform:translateX(-50%);padding:8px 12px;background:#607D8B;color:white;font-family:system-ui, sans-serif;border-radius:6px;z-index:999">Idle</div>
+    <script>
+        // Initialize IWER
+        const xrDevice = new IWER.XRDevice(IWER.metaQuest3, {
+            referenceSpaceType: 'local-floor'
+        });
+        xrDevice.installRuntime();
+        
+        // Configure stereo rendering
+        xrDevice.stereoEnabled = true;
+        xrDevice.ipd = 0.064;
+
+        // Three.js setup
+        const scene = new THREE.Scene();
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.xr.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // Create proper camera configuration
+        const camera = new THREE.PerspectiveCamera(
+            75, // FOV
+            window.innerWidth / window.innerHeight, // Aspect ratio
+            0.1, // Near plane (MUST be > 0)
+            1000 // Far plane
+        );
+        
+        // Add lighting
+        const light = new THREE.DirectionalLight(0xffffff, 1);
+        light.position.set(1, 1, 1);
+        scene.add(light);
+        scene.add(new THREE.AmbientLight(0x404040));
+
+        // Add test object
+        const geometry = new THREE.BoxGeometry();
+        const material = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+        const cube = new THREE.Mesh(geometry, material);
+        scene.add(cube);
+        cube.position.z = -3;
+
+        // XR Session handling (auto-start capable via IWER polyfill)
+        const statusEl = document.getElementById('status');
+        const XR_RENDER_SCALE = 1.0;
+
+        function xrRenderLoop(timestamp, frame) {
+            cube.rotation.y += 0.01;
+            renderer.render(scene, camera);
+        }
+
+        async function startXrSession() {
+            if (!navigator.xr) {
+                statusEl.textContent = 'WebXR not supported!';
+                statusEl.style.backgroundColor = '#F44336';
+                return;
+            }
+            if (!await navigator.xr.isSessionSupported('immersive-vr')) {
+                statusEl.textContent = 'Immersive VR not supported!';
+                statusEl.style.backgroundColor = '#F44336';
+                return;
+            }
+
+            try {
+                // In IWER, immersive-ar can start without user gesture; use it to auto-enter
+                const session = await navigator.xr.requestSession('immersive-ar', {
+                    requiredFeatures: ['local-floor']
+                });
+                statusEl.textContent = 'XR Session Active';
+                statusEl.style.backgroundColor = '#2196F3';
+
+                session.addEventListener('end', () => {
+                    statusEl.textContent = 'XR Session Ended';
+                    statusEl.style.backgroundColor = '#607D8B';
+                    renderer.setAnimationLoop(null);
+                });
+
+                if (renderer.xr.setFramebufferScaleFactor) {
+                    renderer.xr.setFramebufferScaleFactor(XR_RENDER_SCALE);
+                }
+                const maybePromise = renderer.xr.setSession(session);
+                if (maybePromise && typeof maybePromise.then === 'function') {
+                    await maybePromise;
+                }
+                renderer.setAnimationLoop(xrRenderLoop);
+            } catch (err) {
+                console.error('XR session failed:', err);
+                statusEl.textContent = `XR Error: ${err && err.message ? err.message : err}`;
+                statusEl.style.backgroundColor = '#F44336';
+            }
+        }
+
+        // Manual button fallback and auto-start attempt
+        document.getElementById('xr-button').addEventListener('click', () => { startXrSession(); });
+        // Kick off automatically after IWER installs the runtime
+        Promise.resolve().then(() => startXrSession());
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Initial camera position
+        camera.position.set(0, 1.6, 0);
+        renderer.render(scene, camera);
+    </script>
+</body>
+</html>

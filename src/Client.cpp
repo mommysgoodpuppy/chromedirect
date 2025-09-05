@@ -10,8 +10,8 @@
 #include <string>
 #include <iostream>
 
-OffscreenClient::OffscreenClient(HWND host_window, std::shared_ptr<Presenter> presenter, int width, int height, float scale)
-    : host_window_(host_window), presenter_(std::move(presenter)), width_(width), height_(height), scale_(scale) {
+OffscreenClient::OffscreenClient(HWND host_window, std::shared_ptr<Presenter> presenter, int width, int height, float scale, int frame_rate)
+    : host_window_(host_window), presenter_(std::move(presenter)), width_(width), height_(height), scale_(scale), frame_rate_(frame_rate) {
   std::cout << "[Client] OffscreenClient created (" << width << "x" << height << ", scale=" << scale << ")\n";
 }
 
@@ -19,6 +19,10 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
   browser_ = browser;
   std::cout << "[Client] Browser created successfully! ID: " << browser->GetIdentifier() << "\n";
+  if (frame_rate_ > 0) {
+    browser->GetHost()->SetWindowlessFrameRate(frame_rate_);
+    std::cout << "[Client] Windowless frame rate set to " << frame_rate_ << " FPS\n";
+  }
   
   // Force an invalidation to trigger paint events
   browser->GetHost()->Invalidate(PET_VIEW);
@@ -111,4 +115,3 @@ bool OffscreenClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
   std::cout << "[Client] OnBeforeBrowse: " << request->GetURL().ToString() << "\n";
   return false;  // allow
 }
-

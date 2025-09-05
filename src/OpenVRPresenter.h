@@ -30,12 +30,21 @@ public:
   // legacy-shared texture, and submits via DXGI shared handle.
   void PresentSharedHandle(HANDLE shared_handle, int srcWidth, int srcHeight) override;
 
+  // Configure overlay flags
+  void SetStereoPanorama(bool enable);
+
+  // Configure shader-based panorama transform (from SBS input)
+  // fovHalfRadians: half FOV in radians for the projection.
+  void ConfigurePanoramaShader(bool enable, float fovHalfRadians, bool inputSideBySide = true);
+  void SetShaderDebugMode(int mode); // 0=normal,1=passthrough,2=uv
+
   // Get the D3D11 device for CEF compatibility
   Microsoft::WRL::ComPtr<ID3D11Device> GetDevice() const override { return device_; }
 
 private:
   bool InitializeOpenVR();
   bool CreateD3DDevice();
+  bool EnsureShaderPipeline(UINT width, UINT height);
   void Cleanup();
 
   // D3D11 device/context used for interop and copies.
@@ -62,4 +71,19 @@ private:
   Microsoft::WRL::ComPtr<ID3D11Texture2D> shared_legacy_tex_;
   D3D11_TEXTURE2D_DESC shared_legacy_desc_ = {};
   HANDLE shared_legacy_handle_ = nullptr;
+
+  // Optional: render into shared_legacy_tex_ via a shader pipeline
+  bool shader_enabled_ = false;
+  bool shader_input_sbs_ = true;
+  float fov_half_radians_ = 0.78539816339f; // ~45 deg
+  Microsoft::WRL::ComPtr<ID3D11VertexShader> vs_;
+  Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_;
+  Microsoft::WRL::ComPtr<ID3D11Buffer> cb_params_;
+  Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler_;
+  Microsoft::WRL::ComPtr<ID3D11RenderTargetView> shared_rtv_;
+  Microsoft::WRL::ComPtr<ID3D11RasterizerState> rs_state_;
+  Microsoft::WRL::ComPtr<ID3D11BlendState> blend_state_;
+  Microsoft::WRL::ComPtr<ID3D11DepthStencilState> ds_state_;
+  D3D11_VIEWPORT viewport_ = {};
+  int shader_debug_mode_ = 0;
 };

@@ -17,7 +17,7 @@ class OffscreenClient final : public CefClient,
                               public CefDisplayHandler,
                               public CefRequestHandler {
 public:
-  OffscreenClient(HWND host_window, std::shared_ptr<Presenter> presenter, int width, int height, float scale = 1.0f);
+  OffscreenClient(HWND host_window, std::shared_ptr<Presenter> presenter, int width, int height, float scale = 1.0f, int frame_rate = 60);
 
   // CefClient
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
@@ -63,9 +63,9 @@ private:
   int width_ = 800;
   int height_ = 600;
   float scale_ = 1.0f;
+  int frame_rate_ = 60;
   std::atomic<bool> got_accel_{false};
 
   IMPLEMENT_REFCOUNTING(OffscreenClient);
   DISALLOW_COPY_AND_ASSIGN(OffscreenClient);
 };
-

@@ -88,6 +88,7 @@ endif()
 
 # Additional libraries (system libs)
 target_link_libraries(${APP_NAME} PRIVATE d3d11 dxgi)
+target_link_libraries(${APP_NAME} PRIVATE d3dcompiler)
 
 # OpenVR library
 target_include_directories(${APP_NAME} PRIVATE ${OPENVR_INCLUDE_DIR})

@@ -33,11 +33,24 @@ Artifacts are placed under `build/bin/` alongside all required CEF and OpenVR ru
 
 ## Run
 1. Start SteamVR.
-2. Run `build/bin/chromedirect_demo.exe`.
-3. By default, the app starts in VR overlay mode (headless window). To use the desktop presenter instead, set `ENABLE_VR_MODE = false` in `src/main.cpp` and rebuild.
+2. Option A: Run `build/bin/chromedirect_demo.exe` directly (VR overlay mode by default).
+3. Option B: Use the Deno launcher to create the overlay and spawn the C++ host (recommended for scripting):
 
-The overlay shows a live CEF browser (default URL: Google). 
+```
+deno run -A deno_cef_overlay_launcher.ts \
+  --key=cef.web.overlay \
+  --width=1280 --height=720 \
+  --scale=1.0 \
+  --url=https://www.google.com \
+  --exe=./build/bin/chromedirect_demo.exe
+```
+
+The overlay shows a live CEF browser (default URL: Google).
 
 ## Logging
 - Console logs from the main process
 - CEF logs at `build/bin/cef_detailed.log`
+
+## Notes
+- The C++ host will find or create the overlay by key (`cef.web.overlay`) and submit textures to it. The Deno script pre-creates and positions the overlay, so the host picks it up immediately.
+- You can customize overlay key, size, and URL via the Deno script flags.

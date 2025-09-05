@@ -18,9 +18,11 @@
 #include <iostream>
 #include <io.h>
 #include <fcntl.h>
+#include <algorithm>
+#include <cstdlib>
 
-// Configuration
-static constexpr bool ENABLE_VR_MODE = true; // Set to false to use regular D3D presenter
+// Configuration (runtime via flags)
+static bool g_enable_vr_mode = true; // --vr=false to use regular D3D presenter
 
 // Global variables for cleanup
 static std::atomic<bool> g_shutdown_requested{false};
@@ -57,6 +59,11 @@ class SimpleApp : public CefApp {
       command_line->AppendSwitchWithValue("use-angle", "d3d11");
     if (!command_line->HasSwitch("disable-gpu-sandbox"))
       command_line->AppendSwitch("disable-gpu-sandbox");
+    // Unlock VSYNC/frame caps where possible (Chromium flags)
+    if (!command_line->HasSwitch("disable-gpu-vsync"))
+      command_line->AppendSwitch("disable-gpu-vsync");
+    if (!command_line->HasSwitch("disable-frame-rate-limit"))
+      command_line->AppendSwitch("disable-frame-rate-limit");
     // Smooth scheduling for OSR
     if (!command_line->HasSwitch("enable-begin-frame-scheduling"))
       command_line->AppendSwitch("enable-begin-frame-scheduling");
@@ -144,17 +151,71 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   std::cout << "[CEF Demo] Starting CEF application...\n";
   std::cout << "[CEF Demo] Main process continuing...\n";
 
+  // Parse command line for runtime options
+  CefRefPtr<CefCommandLine> app_cmd = CefCommandLine::CreateCommandLine();
+  app_cmd->InitFromString(::GetCommandLineW());
+
   // Setup signal handlers
   std::cout << "[CEF Demo] Setting up signal handlers...\n";
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);
   SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
-  // Window / headless setup
+  // Window / headless setup and runtime options
   int width = 1280;
   int height = 720;
+  float scale_m = 1.0f;
+  std::string overlay_key = "cef.web.overlay";
+  std::string start_url = "https://www.google.com";
+  int target_fps = 120; // default higher than 60 to unlock
+  bool stereo_panorama_flag = false;
+  bool shader_panorama = false;
+  float fov_deg = 90.0f; // total FOV; half used in shader
+  int shader_debug = 0; // 0=normal,1=passthrough,2=uv
+
+  if (app_cmd->HasSwitch("vr")) {
+    const std::string v = app_cmd->GetSwitchValue("vr");
+    if (!v.empty()) {
+      g_enable_vr_mode = !(v == "0" || v == "false" || v == "no");
+    }
+  }
+  if (app_cmd->HasSwitch("width")) {
+    width = std::max(64, atoi(app_cmd->GetSwitchValue("width").ToString().c_str()));
+  }
+  if (app_cmd->HasSwitch("height")) {
+    height = std::max(64, atoi(app_cmd->GetSwitchValue("height").ToString().c_str()));
+  }
+  if (app_cmd->HasSwitch("scale")) {
+    scale_m = std::max(0.01f, static_cast<float>(atof(app_cmd->GetSwitchValue("scale").ToString().c_str())));
+  }
+  if (app_cmd->HasSwitch("overlay-key")) {
+    overlay_key = app_cmd->GetSwitchValue("overlay-key").ToString();
+  }
+  if (app_cmd->HasSwitch("url")) {
+    start_url = app_cmd->GetSwitchValue("url").ToString();
+  }
+  if (app_cmd->HasSwitch("fps")) {
+    target_fps = std::max(1, atoi(app_cmd->GetSwitchValue("fps").ToString().c_str()));
+  }
+  if (app_cmd->HasSwitch("overlay-stereo-panorama")) {
+    const std::string v = app_cmd->GetSwitchValue("overlay-stereo-panorama");
+    stereo_panorama_flag = (v.empty() || v == "1" || v == "true");
+  }
+  if (app_cmd->HasSwitch("shader-panorama")) {
+    const std::string v = app_cmd->GetSwitchValue("shader-panorama");
+    shader_panorama = (v.empty() || v == "1" || v == "true");
+  }
+  if (app_cmd->HasSwitch("fov-deg")) {
+    fov_deg = std::max(1.0f, static_cast<float>(atof(app_cmd->GetSwitchValue("fov-deg").ToString().c_str())));
+  }
+  if (app_cmd->HasSwitch("shader-debug")) {
+    const std::string v = app_cmd->GetSwitchValue("shader-debug");
+    if (v == "passthrough" || v == "1") shader_debug = 1;
+    else if (v == "uv" || v == "2") shader_debug = 2;
+    else shader_debug = 0;
+  }
   HWND hWnd = nullptr;
-  if constexpr (!ENABLE_VR_MODE) {
+  if (!g_enable_vr_mode) {
     std::cout << "[CEF Demo] Creating window...\n";
     const wchar_t kClassName[] = L"CEFOffscreenDemo";
     WNDCLASSEXW wcex = { sizeof(WNDCLASSEXW) };
@@ -215,15 +276,28 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
   // Presenter (VR or regular D3D)
   std::shared_ptr<Presenter> presenter;
-  if constexpr (ENABLE_VR_MODE) {
+  if (g_enable_vr_mode) {
     std::cout << "[CEF Demo] Initializing OpenVR presenter...\n";
     std::shared_ptr<OpenVRPresenter> vr_presenter = std::make_shared<OpenVRPresenter>();
-    if (!vr_presenter->Initialize("cef.web.overlay", width, height, 1.0f)) {
+    if (!vr_presenter->Initialize(overlay_key.c_str(), width, height, scale_m)) {
       std::cerr << "[CEF Demo] ERROR: OpenVR presenter initialization failed!\n";
       CefShutdown();
       return -1;
     }
     std::cout << "[CEF Demo] OpenVR presenter initialized successfully\n";
+    if (stereo_panorama_flag) {
+      vr_presenter->SetStereoPanorama(true);
+      std::cout << "[CEF Demo] Overlay flag: StereoPanorama enabled\n";
+    }
+    if (shader_panorama) {
+      float fov_half_rad = (fov_deg * 0.5f) * 3.1415926535f / 180.0f;
+      vr_presenter->ConfigurePanoramaShader(true, fov_half_rad, true /*SBS*/);
+      std::cout << "[CEF Demo] Shader panorama enabled (FOV half rad=" << fov_half_rad << ")\n";
+      if (shader_debug != 0) {
+        vr_presenter->SetShaderDebugMode(shader_debug);
+        std::cout << "[CEF Demo] Shader debug mode=" << shader_debug << " (1=passthrough,2=uv)\n";
+      }
+    }
     presenter = vr_presenter;
   } else {
     std::cout << "[CEF Demo] Initializing D3D presenter...\n";
@@ -239,7 +313,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
   // Create browser windowless
   CefWindowInfo wi;
-  if constexpr (ENABLE_VR_MODE) {
+  if (g_enable_vr_mode) {
     wi.SetAsWindowless(nullptr);
   } else {
     wi.SetAsWindowless(hWnd);
@@ -254,14 +328,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   }
 
   CefBrowserSettings bs;
-  bs.windowless_frame_rate = 60;
+  bs.windowless_frame_rate = target_fps;
 
   std::cout << "[CEF Demo] Creating browser client...\n";
-  g_client = new OffscreenClient(ENABLE_VR_MODE ? nullptr : hWnd, presenter, width, height, 1.0f);
+  g_client = new OffscreenClient(g_enable_vr_mode ? nullptr : hWnd, presenter, width, height, 1.0f, target_fps);
   CefRefPtr<CefClient> base_client = g_client;
 
-  std::cout << "[CEF Demo] Creating browser with URL: https://www.google.com\n";
-  if (!CefBrowserHost::CreateBrowser(wi, base_client, "https://www.google.com", bs, nullptr, nullptr)) {
+  std::cout << "[CEF Demo] Creating browser with URL: " << start_url << "\n";
+  if (!CefBrowserHost::CreateBrowser(wi, base_client, start_url, bs, nullptr, nullptr)) {
     std::cerr << "[CEF Demo] ERROR: Failed to create browser!\n";
     CefShutdown();
     return -1;

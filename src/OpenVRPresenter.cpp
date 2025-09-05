@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <dxgi.h>
+#include <d3dcompiler.h>
 
 /*
  Minimal OpenVR overlay presenter for CEF OSR.
@@ -52,6 +53,14 @@ bool OpenVRPresenter::Initialize(const char* overlay_key, int width, int height,
       return false;
     }
     
+    // Default viewport for potential shader path
+    viewport_.TopLeftX = 0.0f;
+    viewport_.TopLeftY = 0.0f;
+    viewport_.Width = static_cast<float>(width);
+    viewport_.Height = static_cast<float>(height);
+    viewport_.MinDepth = 0.0f;
+    viewport_.MaxDepth = 1.0f;
+
     std::cout << "[OpenVR] Initialize successful\n";
     return true;
   } catch (const std::exception& e) {
@@ -149,6 +158,192 @@ bool OpenVRPresenter::InitializeOpenVR() {
   vr::VROverlay()->ShowOverlay(overlay_handle_);
   overlay_created_ = true;
   
+  return true;
+}
+
+void OpenVRPresenter::SetStereoPanorama(bool enable) {
+  std::lock_guard<std::mutex> lock(mtx_);
+  if (!overlay_created_) return;
+  vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_StereoPanorama, enable);
+  // Ensure regular panorama flag is off when stereo is on
+  if (enable) vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_Panorama, false);
+}
+
+void OpenVRPresenter::ConfigurePanoramaShader(bool enable, float fovHalfRadians, bool inputSideBySide) {
+  std::lock_guard<std::mutex> lock(mtx_);
+  shader_enabled_ = enable;
+  fov_half_radians_ = fovHalfRadians;
+  shader_input_sbs_ = inputSideBySide;
+}
+
+void OpenVRPresenter::SetShaderDebugMode(int mode) {
+  std::lock_guard<std::mutex> lock(mtx_);
+  shader_debug_mode_ = mode;
+}
+
+static const char* kVS_Src = R"HLSL(
+struct VSOut { float4 pos:SV_Position; float2 uv:TEXCOORD0; };
+VSOut main(uint vid:SV_VertexID){
+  float2 pos[4] = { float2(-1,-1), float2(1,-1), float2(-1,1), float2(1,1) };
+  float2 uv[4]  = { float2(0,0),  float2(1,0),  float2(0,1),  float2(1,1) };
+  VSOut o; o.pos=float4(pos[vid],0,1); o.uv=float2(uv[vid].x, 1.0 - uv[vid].y); return o;
+}
+)HLSL";
+
+static const char* kPS_Src = R"HLSL(
+Texture2D srcTex : register(t0);
+SamplerState samp0 : register(s0);
+
+cbuffer Params : register(b0) {
+  float4x4 lookRotation; // not used yet; keep for parity
+  float halfFOVInRadians;
+  float inputIsSBS; // 1.0 = SBS, 0.0 = TB (not used yet)
+  float debugMode; // 0=normal,1=passthrough,2=uv,3=solid
+}
+
+static const float PI = 3.141592;
+static const float HALF_PI = 0.5 * PI;
+static const float QUARTER_PI = 0.25 * PI;
+
+struct PSIn { float4 pos:SV_Position; float2 uv:TEXCOORD0; };
+float4 main(PSIn i) : SV_Target {
+  float2 uv = i.uv; // 0..1
+  if (debugMode >= 1.0) {
+    if (debugMode < 2.0) {
+      float4 cc = srcTex.Sample(samp0, uv);
+      cc.a = 1.0;
+      return cc; // passthrough
+    } else if (debugMode < 3.0) {
+      return float4(uv, 0.0, 1.0); // visualize UVs
+    } else {
+      return float4(0.0, 1.0, 0.0, 1.0); // solid green
+    }
+  }
+  float2 xy_flipped = float2(uv.x, 1.0 - uv.y);
+  float2 xy_normalized = 2.0 * xy_flipped - 1.0;
+  float2 xy_angles = xy_normalized * float2(PI, HALF_PI);
+
+  float2 xy_eye_angles = xy_angles;
+  xy_eye_angles.y *= 2.0;
+  bool renderTopHalf = (xy_eye_angles.y >= 0.0);
+  if (renderTopHalf) xy_eye_angles.y -= HALF_PI; else xy_eye_angles.y += HALF_PI;
+
+  float fovScalar = tan(halfFOVInRadians) / tan(QUARTER_PI);
+
+  float3 dir;
+  dir.x = sin(xy_angles.x) * cos(xy_eye_angles.y);
+  dir.y = sin(xy_eye_angles.y);
+  dir.z = cos(xy_angles.x) * cos(xy_eye_angles.y);
+
+  // Optional look rotation; not applied for now
+  // dir = mul(float4(dir,0.0), lookRotation).xyz;
+
+  float projX = (dir.x / abs(dir.z)) / fovScalar;
+  float projY = (dir.y / abs(dir.z)) / fovScalar;
+  float2 eyeUV = float2((projX + 1.0) * 0.5, (projY + 1.0) * 0.5);
+  eyeUV = saturate(eyeUV);
+
+  // Sample from SBS source: left half for top, right half for bottom (per original shader mapping)
+  if (renderTopHalf) {
+    eyeUV.x = eyeUV.x * 0.5; // left half
+  } else {
+    eyeUV.x = eyeUV.x * 0.5 + 0.5; // right half
+  }
+
+  float4 c = srcTex.Sample(samp0, eyeUV);
+  // Force opaque to avoid fully-transparent OSR textures
+  c.a = 1.0;
+  return c;
+}
+)HLSL";
+
+bool OpenVRPresenter::EnsureShaderPipeline(UINT width, UINT height) {
+  if (!shader_enabled_) return false;
+  if (!device_ || !context_) return false;
+
+  HRESULT hr;
+  if (!vs_ || !ps_) {
+    ComPtr<ID3DBlob> vsBlob, psBlob, err;
+    hr = D3DCompile(kVS_Src, strlen(kVS_Src), nullptr, nullptr, nullptr, "main", "vs_5_0", 0, 0, vsBlob.GetAddressOf(), err.GetAddressOf());
+    if (FAILED(hr)) {
+      std::cerr << "[OpenVR] ERROR: VS compile failed\n";
+      return false;
+    }
+    hr = D3DCompile(kPS_Src, strlen(kPS_Src), nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0, psBlob.GetAddressOf(), err.GetAddressOf());
+    if (FAILED(hr)) {
+      std::cerr << "[OpenVR] ERROR: PS compile failed\n";
+      return false;
+    }
+    ThrowIfFailed(device_->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, vs_.GetAddressOf()));
+    ThrowIfFailed(device_->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, ps_.GetAddressOf()));
+
+    // Constant buffer
+    D3D11_BUFFER_DESC cbd = {};
+    cbd.ByteWidth = 64 + 16; // 4x4 matrix (64) + 3 floats padded to 16
+    cbd.Usage = D3D11_USAGE_DYNAMIC;
+    cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    ThrowIfFailed(device_->CreateBuffer(&cbd, nullptr, cb_params_.GetAddressOf()));
+
+    // Sampler
+    D3D11_SAMPLER_DESC sd = {};
+    sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sd.MaxLOD = D3D11_FLOAT32_MAX;
+    ThrowIfFailed(device_->CreateSamplerState(&sd, sampler_.GetAddressOf()));
+
+    // Rasterizer: cull none
+    D3D11_RASTERIZER_DESC rd = {};
+    rd.FillMode = D3D11_FILL_SOLID;
+    rd.CullMode = D3D11_CULL_NONE;
+    rd.DepthClipEnable = TRUE;
+    ThrowIfFailed(device_->CreateRasterizerState(&rd, rs_state_.GetAddressOf()));
+
+    // Blend: no blending, write all
+    D3D11_BLEND_DESC bd = {};
+    bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    ThrowIfFailed(device_->CreateBlendState(&bd, blend_state_.GetAddressOf()));
+
+    // Depth-stencil: disabled
+    D3D11_DEPTH_STENCIL_DESC dd = {};
+    dd.DepthEnable = FALSE;
+    dd.StencilEnable = FALSE;
+    ThrowIfFailed(device_->CreateDepthStencilState(&dd, ds_state_.GetAddressOf()));
+  }
+
+  // Ensure shared legacy tex is RTV-capable for direct render
+  bool needTex = (!shared_legacy_tex_) ||
+                 (shared_legacy_desc_.Width != width) ||
+                 (shared_legacy_desc_.Height != height);
+  if (needTex) {
+    shared_legacy_tex_.Reset();
+    shared_rtv_.Reset();
+    shared_legacy_handle_ = nullptr;
+    ZeroMemory(&shared_legacy_desc_, sizeof(shared_legacy_desc_));
+    shared_legacy_desc_.Width = width;
+    shared_legacy_desc_.Height = height;
+    shared_legacy_desc_.MipLevels = 1;
+    shared_legacy_desc_.ArraySize = 1;
+    shared_legacy_desc_.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    shared_legacy_desc_.SampleDesc.Count = 1;
+    shared_legacy_desc_.Usage = D3D11_USAGE_DEFAULT;
+    shared_legacy_desc_.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    shared_legacy_desc_.CPUAccessFlags = 0;
+    shared_legacy_desc_.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+    HRESULT hrc = device_->CreateTexture2D(&shared_legacy_desc_, nullptr, shared_legacy_tex_.GetAddressOf());
+    if (FAILED(hrc)) {
+      std::cerr << "[OpenVR] ERROR: CreateTexture2D RTV shared failed, hr=0x" << std::hex << hrc << std::dec << "\n";
+      return false;
+    }
+    ThrowIfFailed(device_->CreateRenderTargetView(shared_legacy_tex_.Get(), nullptr, shared_rtv_.GetAddressOf()));
+    ComPtr<IDXGIResource> dxr;
+    if (SUCCEEDED(shared_legacy_tex_.As(&dxr))) {
+      dxr->GetSharedHandle(&shared_legacy_handle_);
+    }
+  }
+
+  viewport_.Width = static_cast<float>(width);
+  viewport_.Height = static_cast<float>(height);
   return true;
 }
 
@@ -287,60 +482,110 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     }
   }
 
-  // Create or reuse a legacy-shared (non-NT handle) texture and copy the contents, then submit via DXGI shared handle
+  // Create or reuse the shared texture target. If shader path is enabled, ensure RTV target exists.
   D3D11_TEXTURE2D_DESC submitDesc = {};
   submitTex->GetDesc(&submitDesc);
-  const bool sizeChanged = (shared_legacy_tex_ == nullptr) ||
-                           (shared_legacy_desc_.Width != submitDesc.Width) ||
-                           (shared_legacy_desc_.Height != submitDesc.Height) ||
-                           (shared_legacy_desc_.Format != submitDesc.Format);
-  if (sizeChanged) {
-    shared_legacy_tex_.Reset();
-    shared_legacy_handle_ = nullptr;
-    shared_legacy_desc_ = submitDesc;
-    shared_legacy_desc_.MiscFlags = D3D11_RESOURCE_MISC_SHARED; // legacy shared handle
-    shared_legacy_desc_.BindFlags |= D3D11_BIND_SHADER_RESOURCE; // ensure SRV-capable
-    HRESULT hrShare = device_->CreateTexture2D(&shared_legacy_desc_, nullptr, shared_legacy_tex_.GetAddressOf());
-    if (FAILED(hrShare)) {
-      std::cerr << "[OpenVR] ERROR: Failed to create/recreate legacy-shared texture, hr=0x" << std::hex << hrShare << std::dec << "\n";
-      // Fall back to direct pointer submission
-      last_submitted_texture_ = submitTex;
-      vr::Texture_t eyeTexture = { (void*)submitTex.Get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
-      vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
-      if (overlayError != vr::VROverlayError_None) {
-        std::cerr << "[OpenVR] ERROR: SetOverlayTexture failed: " << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
-      } else if (present_count <= 5) {
-        std::cout << "[OpenVR] Texture submitted to overlay successfully (direct pointer fallback)\n";
-      }
-      goto post_submit_visibility_check; // skip DXGI handle path this frame
-    }
-    // Fetch shared handle once
-    ComPtr<IDXGIResource> dxgiRes;
-    if (FAILED(shared_legacy_tex_.As(&dxgiRes))) {
-      std::cerr << "[OpenVR] ERROR: Failed to QI IDXGIResource on legacy-shared texture\n";
-    } else {
-      HRESULT hrHandle = dxgiRes->GetSharedHandle(&shared_legacy_handle_);
-      if (FAILED(hrHandle) || !shared_legacy_handle_) {
-        std::cerr << "[OpenVR] ERROR: GetSharedHandle failed for legacy-shared texture, hr=0x" << std::hex << hrHandle << std::dec << "\n";
-      } else if (present_count <= 3) {
-        std::cout << "[OpenVR] Obtained DXGI shared handle: " << shared_legacy_handle_ << "\n";
-      }
+
+  if (shader_enabled_) {
+    if (!EnsureShaderPipeline(submitDesc.Width, submitDesc.Height)) {
+      std::cerr << "[OpenVR] WARNING: Shader pipeline unavailable; falling back to copy\n";
+      shader_enabled_ = false; // disable for subsequent frames
     }
   }
 
-  if (shared_legacy_tex_) {
+  if (!shader_enabled_) {
+    // Copy path (previous behavior)
+    const bool sizeChanged = (shared_legacy_tex_ == nullptr) ||
+                             (shared_legacy_desc_.Width != submitDesc.Width) ||
+                             (shared_legacy_desc_.Height != submitDesc.Height) ||
+                             (shared_legacy_desc_.Format != submitDesc.Format);
+    if (sizeChanged) {
+      shared_legacy_tex_.Reset();
+      shared_legacy_handle_ = nullptr;
+      shared_legacy_desc_ = submitDesc;
+      shared_legacy_desc_.MiscFlags = D3D11_RESOURCE_MISC_SHARED; // legacy shared handle
+      shared_legacy_desc_.BindFlags |= D3D11_BIND_SHADER_RESOURCE; // ensure SRV-capable
+      HRESULT hrShare = device_->CreateTexture2D(&shared_legacy_desc_, nullptr, shared_legacy_tex_.GetAddressOf());
+      if (FAILED(hrShare)) {
+        std::cerr << "[OpenVR] ERROR: Failed to create/recreate legacy-shared texture, hr=0x" << std::hex << hrShare << std::dec << "\n";
+        // Fall back to direct pointer submission
+        last_submitted_texture_ = submitTex;
+        vr::Texture_t eyeTexture = { (void*)submitTex.Get(), vr::TextureType_DirectX, vr::ColorSpace_Auto };
+        vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
+        if (overlayError != vr::VROverlayError_None) {
+          std::cerr << "[OpenVR] ERROR: SetOverlayTexture failed: " << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
+        } else if (present_count <= 5) {
+          std::cout << "[OpenVR] Texture submitted to overlay successfully (direct pointer fallback)\n";
+        }
+        goto post_submit_visibility_check;
+      }
+      // Fetch shared handle once
+      ComPtr<IDXGIResource> dxgiRes;
+      if (SUCCEEDED(shared_legacy_tex_.As(&dxgiRes))) {
+        dxgiRes->GetSharedHandle(&shared_legacy_handle_);
+      }
+    }
     context_->CopyResource(shared_legacy_tex_.Get(), submitTex.Get());
     context_->Flush();
-    last_submitted_texture_ = shared_legacy_tex_; // ensure lifetime across submit
-    if (shared_legacy_handle_) {
-      vr::Texture_t eyeTexture = { (void*)shared_legacy_handle_, vr::TextureType_DXGISharedHandle, vr::ColorSpace_Auto };
-      vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
-      if (overlayError != vr::VROverlayError_None) {
-        std::cerr << "[OpenVR] ERROR: SetOverlayTexture (DXGISharedHandle) failed: "
-                  << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
-      } else if (present_count <= 5) {
-        std::cout << "[OpenVR] Texture submitted to overlay successfully (DXGI shared handle)\n";
-      }
+    last_submitted_texture_ = shared_legacy_tex_;
+  } else {
+    // Shader path: render SBS -> stereo panorama into shared_legacy_tex_
+    // Create SRV for submitTex (let D3D infer view desc)
+    ComPtr<ID3D11ShaderResourceView> srv;
+    HRESULT hrs = device_->CreateShaderResourceView(submitTex.Get(), nullptr, srv.GetAddressOf());
+    if (FAILED(hrs)) {
+      std::cerr << "[OpenVR] ERROR: Create SRV failed, hr=0x" << std::hex << hrs << std::dec << "\n";
+      goto post_submit_visibility_check;
+    }
+
+    context_->OMSetRenderTargets(1, shared_rtv_.GetAddressOf(), nullptr);
+    context_->RSSetViewports(1, &viewport_);
+    context_->IASetInputLayout(nullptr);
+    context_->RSSetState(rs_state_.Get());
+    const float blendFactor[4] = {0,0,0,0};
+    context_->OMSetBlendState(blend_state_.Get(), blendFactor, 0xffffffff);
+    context_->OMSetDepthStencilState(ds_state_.Get(), 0);
+    context_->VSSetShader(vs_.Get(), nullptr, 0);
+    context_->PSSetShader(ps_.Get(), nullptr, 0);
+    context_->PSSetSamplers(0, 1, sampler_.GetAddressOf());
+    context_->PSSetShaderResources(0, 1, srv.GetAddressOf());
+
+    // Update constants
+    D3D11_MAPPED_SUBRESOURCE map = {};
+    if (SUCCEEDED(context_->Map(cb_params_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) {
+      // Identity lookRotation, then parameters
+      float* dst = reinterpret_cast<float*>(map.pData);
+      // 4x4 identity
+      for (int r=0;r<4;++r) for (int c=0;c<4;++c) dst[r*4+c] = (r==c)?1.0f:0.0f;
+      dst[16] = fov_half_radians_;
+      dst[17] = shader_input_sbs_ ? 1.0f : 0.0f;
+      dst[18] = static_cast<float>(shader_debug_mode_);
+      dst[19] = 0.0f;
+      context_->Unmap(cb_params_.Get(), 0);
+    }
+    context_->VSSetConstantBuffers(0, 1, cb_params_.GetAddressOf());
+    context_->PSSetConstantBuffers(0, 1, cb_params_.GetAddressOf());
+
+    // Draw full-screen quad (no VB/IB via SV_VertexID)
+    context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    context_->Draw(4, 0);
+    context_->Flush();
+
+    if (present_count <= 3) {
+      std::cout << "[OpenVR] Shader panorama path drew fullscreen quad\n";
+    }
+
+    last_submitted_texture_ = shared_legacy_tex_;
+  }
+
+  if (shared_legacy_handle_) {
+    vr::Texture_t eyeTexture = { (void*)shared_legacy_handle_, vr::TextureType_DXGISharedHandle, vr::ColorSpace_Auto };
+    vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
+    if (overlayError != vr::VROverlayError_None) {
+      std::cerr << "[OpenVR] ERROR: SetOverlayTexture (DXGISharedHandle) failed: "
+                << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
+    } else if (present_count <= 5) {
+      std::cout << "[OpenVR] Texture submitted to overlay successfully (DXGI shared handle)\n";
     }
   }
 
@@ -407,4 +652,3 @@ void OpenVRPresenter::Cleanup() {
   context_.Reset();
   device_.Reset();
 }
-
