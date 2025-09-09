@@ -6,6 +6,7 @@
 #include <include/cef_request.h>
 #include <include/cef_sandbox_win.h>
 #include <include/wrapper/cef_helpers.h>
+#include <include/cef_task.h>
 
 #include <string>
 #include <iostream>
@@ -29,6 +30,36 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   // Force an invalidation to trigger paint events
   browser->GetHost()->Invalidate(PET_VIEW);
   std::cout << "[Client] Forced browser invalidation to trigger paint\n";
+
+  // Optional: minimal V8 ping to validate page JS runs without render handler
+  CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
+  if (cmd.get() && cmd->HasSwitch("v8-ping")) {
+    int ms = std::max(100, atoi(cmd->GetSwitchValue("v8-ping").ToString().c_str()));
+    v8_ping_enabled_ = true;
+    v8_ping_ms_ = ms;
+    std::cout << "[Client] V8 ping enabled (interval=" << v8_ping_ms_ << " ms)\n";
+    class PingTask : public CefTask {
+     public:
+      PingTask(CefRefPtr<OffscreenClient> c, int ms) : client_(c), ms_(ms) {}
+      void Execute() override {
+        CEF_REQUIRE_UI_THREAD();
+        if (!client_.get()) return;
+        auto br = client_->GetBrowser();
+        if (!br.get()) return;
+        auto frame = br->GetMainFrame();
+        if (frame.get()) {
+          frame->ExecuteJavaScript(R"(window.__cefPingCount=(window.__cefPingCount||0)+1; console.log('[cef-ping]', window.__cefPingCount);)", "", 0);
+        }
+        // Re-schedule if still enabled
+        CefPostDelayedTask(TID_UI, new PingTask(client_, ms_), ms_);
+      }
+     private:
+      CefRefPtr<OffscreenClient> client_;
+      int ms_;
+      IMPLEMENT_REFCOUNTING(PingTask);
+    };
+    CefPostDelayedTask(TID_UI, new PingTask(this, v8_ping_ms_), v8_ping_ms_);
+  }
 }
 
 void OffscreenClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {

@@ -76,6 +76,10 @@ private:
   int frame_rate_ = 60;
   std::atomic<bool> got_accel_{false};
 
+  // Minimal V8 ping (debug) to validate page script execution without renderer handler
+  bool v8_ping_enabled_ = false;
+  int v8_ping_ms_ = 0;
+
   IMPLEMENT_REFCOUNTING(OffscreenClient);
   DISALLOW_COPY_AND_ASSIGN(OffscreenClient);
 };

@@ -22,6 +22,7 @@ type Args = {
   shaderDebug?: string;
   debugIwerHeartbeat?: number; // ms; if set, enables heartbeat
   disableIwerExtension?: boolean; // if true, do not inject iwer extension
+  v8Ping?: number; // ms; if set, pings page via ExecuteJavaScript
 };
 
 function parseArgs(): Args {
@@ -53,6 +54,7 @@ function parseArgs(): Args {
       case "shader-debug": out.shaderDebug = v; break;
       case "debug-iwer-heartbeat": out.debugIwerHeartbeat = Math.max(50, Number(v) || 2000); break;
       case "disable-iwer-extension": out.disableIwerExtension = (v === "1" || v === "true"); break;
+      case "v8-ping": out.v8Ping = Math.max(50, Number(v) || 1000); break;
     }
   }
   // Default URL to local index.html via file:// if none provided
@@ -163,6 +165,7 @@ async function spawnHost(exe: string, args: Args) {
     `--url=${args.url}`,
     `--debug-iwer-heartbeat=${args.debugIwerHeartbeat}`,
     ...(args.disableIwerExtension ? ["--disable-iwer-extension"] : []),
+    ...(args.v8Ping ? [`--v8-ping=${args.v8Ping}`] : []),
     ...(args.fps ? [`--fps=${args.fps}`] : []),
     ...(args.shaderPanorama ? ["--shader-panorama=true"] : []),
     ...(args.stereoPanoramaFlag ? ["--overlay-stereo-panorama=true"] : []),
