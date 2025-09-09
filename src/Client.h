@@ -80,6 +80,11 @@ private:
   bool v8_ping_enabled_ = false;
   int v8_ping_ms_ = 0;
 
+  // Minimal VR postMessage (debug) to validate a browser->page data path
+  bool v8_vr_enabled_ = false;
+  int v8_vr_ms_ = 0;
+  int v8_vr_tick_ = 0;
+
   IMPLEMENT_REFCOUNTING(OffscreenClient);
   DISALLOW_COPY_AND_ASSIGN(OffscreenClient);
 };

@@ -23,6 +23,7 @@ type Args = {
   debugIwerHeartbeat?: number; // ms; if set, enables heartbeat
   disableIwerExtension?: boolean; // if true, do not inject iwer extension
   v8Ping?: number; // ms; if set, pings page via ExecuteJavaScript
+  v8PostVr?: number; // ms; if set, posts dummy VR state to page
 };
 
 function parseArgs(): Args {
@@ -55,6 +56,7 @@ function parseArgs(): Args {
       case "debug-iwer-heartbeat": out.debugIwerHeartbeat = Math.max(50, Number(v) || 2000); break;
       case "disable-iwer-extension": out.disableIwerExtension = (v === "1" || v === "true"); break;
       case "v8-ping": out.v8Ping = Math.max(50, Number(v) || 1000); break;
+      case "v8-post-vr": out.v8PostVr = Math.max(50, Number(v) || 1000); break;
     }
   }
   // Default URL to local index.html via file:// if none provided
@@ -166,6 +168,7 @@ async function spawnHost(exe: string, args: Args) {
     `--debug-iwer-heartbeat=${args.debugIwerHeartbeat}`,
     ...(args.disableIwerExtension ? ["--disable-iwer-extension"] : []),
     ...(args.v8Ping ? [`--v8-ping=${args.v8Ping}`] : []),
+    ...(args.v8PostVr ? [`--v8-post-vr=${args.v8PostVr}`] : []),
     ...(args.fps ? [`--fps=${args.fps}`] : []),
     ...(args.shaderPanorama ? ["--shader-panorama=true"] : []),
     ...(args.stereoPanoramaFlag ? ["--overlay-stereo-panorama=true"] : []),

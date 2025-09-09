@@ -60,6 +60,66 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     };
     CefPostDelayedTask(TID_UI, new PingTask(this, v8_ping_ms_), v8_ping_ms_);
   }
+
+  // Optional: minimal VR data via postMessage to page
+  if (cmd.get() && cmd->HasSwitch("v8-post-vr")) {
+    int ms = std::max(100, atoi(cmd->GetSwitchValue("v8-post-vr").ToString().c_str()));
+    v8_vr_enabled_ = true;
+    v8_vr_ms_ = ms;
+    v8_vr_tick_ = 0;
+    std::cout << "[Client] V8 VR postMessage enabled (interval=" << v8_vr_ms_ << " ms)\n";
+
+    // Install a simple page-side listener (idempotent) to log incoming messages
+    auto frame = browser->GetMainFrame();
+    if (frame.get()) {
+      frame->ExecuteJavaScript(R"JS((function(){
+        try {
+          if (!window.__cefVrListener) {
+            window.addEventListener('message', function(ev){
+              try {
+                if (ev && ev.data && ev.data.type === 'cef-vr') {
+                  var s = ev.data.state || {};
+                  var p = s.hmd && s.hmd.pos; var q = s.hmd && s.hmd.quat;
+                  console.log('[cef-vr]', p, q);
+                }
+              } catch(e) {}
+            });
+            window.__cefVrListener = true;
+          }
+        } catch(e) {}
+      })();)JS", "", 0);
+    }
+
+    // Schedule postMessage sender
+    class VrTask : public CefTask {
+     public:
+      explicit VrTask(CefRefPtr<OffscreenClient> c) : client_(c) {}
+      void Execute() override {
+        CEF_REQUIRE_UI_THREAD();
+        if (!client_.get()) return;
+        auto br = client_->GetBrowser();
+        if (!br.get()) return;
+        auto frame = br->GetMainFrame();
+        if (!frame.get()) return;
+        // Dummy animated pose: small circle, tick-based
+        client_->v8_vr_tick_++;
+        double t = client_->v8_vr_tick_ * (client_->v8_vr_ms_ / 1000.0);
+        double r = 0.25;
+        double x = r * sin(t), y = 1.6, z = r * cos(t);
+        char js[512];
+        snprintf(js, sizeof(js),
+          "(function(){ try{ window.postMessage({type:'cef-vr', state:{hmd:{pos:[%f,%f,%f], quat:[0,0,0,1]}}}, '*'); }catch(e){} })();",
+          x, y, z);
+        frame->ExecuteJavaScript(js, "", 0);
+        // Re-schedule
+        CefPostDelayedTask(TID_UI, new VrTask(client_), client_->v8_vr_ms_);
+      }
+     private:
+      CefRefPtr<OffscreenClient> client_;
+      IMPLEMENT_REFCOUNTING(VrTask);
+    };
+    CefPostDelayedTask(TID_UI, new VrTask(this), v8_vr_ms_);
+  }
 }
 
 void OffscreenClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
