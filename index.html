@@ -22,14 +22,17 @@
     <div id="status" style="position:absolute;top:60px;left:50%;transform:translateX(-50%);padding:8px 12px;background:#607D8B;color:white;font-family:system-ui, sans-serif;border-radius:6px;z-index:999">Idle</div>
     <script>
         // Initialize IWER
+        console.log('[index] Creating XRDevice...');
         const xrDevice = new IWER.XRDevice(IWER.metaQuest3, {
             referenceSpaceType: 'local-floor'
         });
         xrDevice.installRuntime();
+        console.log('[index] IWER runtime installed');
                 
         // Configure stereo rendering
         xrDevice.stereoEnabled = true;
         xrDevice.ipd = 0.068;
+        console.log('[index] XRDevice config set stereoEnabled, ipd=', xrDevice.ipd);
 
         // Three.js setup
         const scene = new THREE.Scene();
@@ -93,6 +96,7 @@
                 });
                 statusEl.textContent = 'XR Session Active';
                 statusEl.style.backgroundColor = '#2196F3';
+                console.log('[index] XR session started');
 
                 session.addEventListener('end', () => {
                     statusEl.textContent = 'XR Session Ended';
@@ -120,6 +124,7 @@
                     await maybePromise;
                 }
                 renderer.setAnimationLoop(xrRenderLoop);
+                console.log('[index] Animation loop set');
             } catch (err) {
                 console.error('XR session failed:', err);
                 statusEl.textContent = `XR Error: ${err && err.message ? err.message : err}`;

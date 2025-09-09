@@ -20,6 +20,8 @@ type Args = {
   stereoPanoramaFlag?: boolean;
   fovDeg?: number;
   shaderDebug?: string;
+  debugIwerHeartbeat?: number; // ms; if set, enables heartbeat
+  disableIwerExtension?: boolean; // if true, do not inject iwer extension
 };
 
 function parseArgs(): Args {
@@ -28,7 +30,7 @@ function parseArgs(): Args {
     width: 4096,
     height: 4096,
     scale: 3.0,
-    url: "http://127.0.0.1:5501/index.html",
+    url: "",
     exe: Deno.build.os === "windows" ? ".\\build\\bin\\chromedirect_demo.exe" : "./build/bin/chromedirect_demo",
   };
   const out = { ...defaults };
@@ -49,7 +51,21 @@ function parseArgs(): Args {
       case "overlay-stereo-panorama": out.stereoPanoramaFlag = v === "true" || v === "1"; break;
       case "fov-deg": out.fovDeg = Math.max(1, Number(v) || 90); break;
       case "shader-debug": out.shaderDebug = v; break;
+      case "debug-iwer-heartbeat": out.debugIwerHeartbeat = Math.max(50, Number(v) || 2000); break;
+      case "disable-iwer-extension": out.disableIwerExtension = (v === "1" || v === "true"); break;
     }
+  }
+  // Default URL to local index.html via file:// if none provided
+  if (!out.url) {
+    const cwd = Deno.cwd();
+    const sep = Deno.build.os === "windows" ? "\\" : "/";
+    const path = `${cwd}${sep}index.html`;
+    const fileUrl = Deno.build.os === "windows" ? `file:///${path.replace(/\\/g, "/")}` : `file://${path}`;
+    out.url = fileUrl;
+  }
+  // Default heartbeat ON at 2000ms if not specified
+  if (!("debugIwerHeartbeat" in out)) {
+    out.debugIwerHeartbeat = 2000;
   }
   return out;
 }
@@ -145,6 +161,8 @@ async function spawnHost(exe: string, args: Args) {
     `--scale=${args.scale}`,
     `--overlay-key=${args.key}`,
     `--url=${args.url}`,
+    `--debug-iwer-heartbeat=${args.debugIwerHeartbeat}`,
+    ...(args.disableIwerExtension ? ["--disable-iwer-extension"] : []),
     ...(args.fps ? [`--fps=${args.fps}`] : []),
     ...(args.shaderPanorama ? ["--shader-panorama=true"] : []),
     ...(args.stereoPanoramaFlag ? ["--overlay-stereo-panorama=true"] : []),
