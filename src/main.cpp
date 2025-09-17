@@ -337,12 +337,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   bool shader_panorama = false;
   float fov_deg = 90.0f; // total FOV; half used in shader
   bool warp_follow_head = false;
+  bool desktop_test_mode = false;
 
   if (app_cmd->HasSwitch("vr")) {
     const std::string v = app_cmd->GetSwitchValue("vr");
     if (!v.empty()) {
       g_enable_vr_mode = !(v == "0" || v == "false" || v == "no");
     }
+  }
+  if (app_cmd->HasSwitch("desktop-test")) {
+    desktop_test_mode = true;
+    g_enable_vr_mode = false;
+    width = 1600;
+    height = 900;
+    target_fps = 60;
+    stereo_panorama_flag = false;
+    shader_panorama = false;
+    std::cout << "[CEF Demo] Desktop test mode enabled (forcing D3D presenter)\n";
   }
   if (app_cmd->HasSwitch("width")) {
     width = std::max(64, atoi(app_cmd->GetSwitchValue("width").ToString().c_str()));
@@ -367,6 +378,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   }
   if (app_cmd->HasSwitch("fps")) {
     target_fps = std::max(1, atoi(app_cmd->GetSwitchValue("fps").ToString().c_str()));
+  }
+  if (desktop_test_mode) {
+    std::cout << "[CEF Demo] Desktop test defaults -> "
+              << width << "x" << height << " @ " << target_fps << " FPS" << std::endl;
   }
   if (app_cmd->HasSwitch("overlay-stereo-panorama")) {
     const std::string v = app_cmd->GetSwitchValue("overlay-stereo-panorama");
@@ -411,12 +426,20 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
   // If not explicitly specified, pick CEF input size based on overlay/shader settings
   if (cef_width < 0) {
-    cef_width = width / 2;
-    //cef_width = shader_panorama ? std::max(64, width * 2) : width;
+    if (g_enable_vr_mode) {
+      cef_width = width / 2;
+      //cef_width = shader_panorama ? std::max(64, width * 2) : width;
+    } else {
+      cef_width = width;
+    }
   };
   if (cef_height < 0) {
-    //cef_height = height
-    cef_height = shader_panorama ? std::max(64, height / 4) : height;
+    if (g_enable_vr_mode) {
+      //cef_height = height
+      cef_height = shader_panorama ? std::max(64, height / 4) : height;
+    } else {
+      cef_height = height;
+    }
   };
 
   // CEF settings

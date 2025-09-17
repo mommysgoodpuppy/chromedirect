@@ -6,8 +6,6 @@ import * as OpenVR from "https://raw.githubusercontent.com/mommysgoodpuppy/OpenV
 import { P } from "https://raw.githubusercontent.com/mommysgoodpuppy/OpenVR_TS_Bindings_Deno/refs/heads/main/pointers.ts";
 import { stringToPointer, createStruct } from "https://raw.githubusercontent.com/mommysgoodpuppy/OpenVR_TS_Bindings_Deno/refs/heads/main/utils.ts";
 
-console.log(await OpenVR.initializeOpenVR())
-
 type Args = {
   key: string;
   width: number;
@@ -15,6 +13,7 @@ type Args = {
   scale: number;
   url: string;
   exe: string;
+  vr: boolean;
   fps?: number;
   shaderPanorama?: boolean;
   stereoPanoramaFlag?: boolean;
@@ -27,6 +26,7 @@ type Args = {
   v8ExtStage?: number; // integer stage to enable minimal render handler
   enableIwerBridge?: boolean; // enable pose bridge
   iwerApplyPose?: number; // ms; browser-side applyPose timer
+  desktopTest?: boolean; // if true, launch host without OpenVR overlay
 };
 
 function parseArgs(): Args {
@@ -37,21 +37,27 @@ function parseArgs(): Args {
     scale: 3.0,
     url: "",
     exe: Deno.build.os === "windows" ? ".\\build\\bin\\chromedirect_demo.exe" : "./build/bin/chromedirect_demo",
+    vr: true,
   };
-  const out = { ...defaults };
-  for (const a of Deno.args) {
-    const m = a.match(/^--([^=]+)=(.*)$/);
-    if (!m) continue;
-    const k = m[1];
-    const v = m[2];
+  const out: Args = { ...defaults };
+  let widthExplicit = false;
+  let heightExplicit = false;
+  let fpsExplicit = false;
+  let vrExplicit = false;
+
+  for (const rawArg of Deno.args) {
+    if (!rawArg.startsWith("--")) continue;
+    const eq = rawArg.indexOf("=");
+    const k = eq === -1 ? rawArg.slice(2) : rawArg.slice(2, eq);
+    const v = eq === -1 ? "" : rawArg.slice(eq + 1);
     switch (k) {
       case "key": out.key = v; break;
-      case "width": out.width = Math.max(64, Number(v) || out.width); break;
-      case "height": out.height = Math.max(64, Number(v) || out.height); break;
+      case "width": out.width = Math.max(64, Number(v) || out.width); widthExplicit = true; break;
+      case "height": out.height = Math.max(64, Number(v) || out.height); heightExplicit = true; break;
       case "scale": out.scale = Math.max(0.01, Number(v) || out.scale); break;
       case "url": out.url = v; break;
       case "exe": out.exe = v; break;
-      case "fps": out.fps = Math.max(1, Number(v) || 120); break;
+      case "fps": out.fps = Math.max(1, Number(v) || 120); fpsExplicit = true; break;
       case "shader-panorama": out.shaderPanorama = v === "true" || v === "1"; break;
       case "overlay-stereo-panorama": out.stereoPanoramaFlag = v === "true" || v === "1"; break;
       case "fov-deg": out.fovDeg = Math.max(1, Number(v) || 90); break;
@@ -63,7 +69,27 @@ function parseArgs(): Args {
       case "v8-ext-stage": out.v8ExtStage = Math.max(1, Number(v) || 1); break;
       case "enable-iwer-bridge": out.enableIwerBridge = (v === "1" || v === "true" || v === ""); break;
       case "iwer-apply-pose": out.iwerApplyPose = Math.max(5, Number(v) || 11); break;
+      case "vr": {
+        vrExplicit = true;
+        const val = v.toLowerCase();
+        out.vr = !(val === "0" || val === "false" || val === "no");
+        break;
+      }
+      case "desktop-test": {
+        const enable = v === "" || v === "1" || v === "true";
+        out.desktopTest = enable;
+        if (enable) out.vr = false;
+        break;
+      }
     }
+  }
+  if (out.desktopTest) {
+    if (!widthExplicit) out.width = 1600;
+    if (!heightExplicit) out.height = 900;
+    if (!fpsExplicit) out.fps = 60;
+    out.vr = false;
+  } else if (!vrExplicit) {
+    out.vr = defaults.vr;
   }
   // Default URL to local index.html via file:// if none provided
   if (!out.url) {
@@ -165,7 +191,7 @@ function setOverlayTransformAnimated(
 async function spawnHost(exe: string, args: Args) {
   // C++ currently uses defaults; we still pass helpful flags for future-proofing
   const params = [
-    `--vr=true`,
+    `--vr=${args.vr ? "true" : "false"}`,
     `--width=${args.width}`,
     `--height=${args.height}`,
     `--scale=${args.scale}`,
@@ -183,6 +209,7 @@ async function spawnHost(exe: string, args: Args) {
     ...(args.stereoPanoramaFlag ? ["--overlay-stereo-panorama=true"] : []),
     ...(args.fovDeg ? [`--fov-deg=${args.fovDeg}`] : []),
     ...(args.shaderDebug ? [`--shader-debug=${args.shaderDebug}`] : []),
+    ...(args.desktopTest ? ["--desktop-test"] : []),
     `--log-console`,
   ];
   const cmd = new Deno.Command(exe, { args: params, stdout: "piped", stderr: "piped" });
@@ -209,37 +236,43 @@ async function spawnHost(exe: string, args: Args) {
 
 if (import.meta.main) {
   const args = parseArgs();
-  console.log("[Deno] Initializing OpenVR overlay:", args);
-  const { overlay, overlayHandle } = initOverlay(args.key, args.scale);
-  console.log(`[Deno] Overlay ready: key=${args.key}, handle=${overlayHandle}`);
+  if (args.vr) {
+    console.log("[Deno] VR overlay mode:", args);
+    console.log(await OpenVR.initializeOpenVR());
+    const { overlay, overlayHandle } = initOverlay(args.key, args.scale);
+    console.log(`[Deno] Overlay ready: key=${args.key}, handle=${overlayHandle}`);
 
-  const child = await spawnHost(args.exe, args);
-  console.log(`[Deno] Spawned host: pid=${child.pid}`);
-  try {
-    // Allow the spawned C++ process to render to this overlay
-    overlay.SetOverlayRenderingPid(overlayHandle, child.pid);
-    console.log(`[Deno] SetOverlayRenderingPid -> ${child.pid}`);
-  } catch (e) {
-    console.warn("[Deno] Failed to SetOverlayRenderingPid:", e);
-  }
-
-  // Keep process alive; pace with WaitFrameSync
-  try {
-    let running = true;
-    addEventListener("SIGINT", () => { running = false; try { child.kill("SIGTERM"); } catch { /* ignore */ } });
-    const start = performance.now();
-    while (running) {
-      const now = performance.now();
-      const t = (now - start) / 1000;
-      // Animate overlay transform slightly each tick
-      /* try {
-        setOverlayTransformAnimated(overlay, overlayHandle, t);
-      } catch (e) {
-        console.warn("[Deno] Failed to animate overlay transform:", e);
-      } */
-      overlay.WaitFrameSync(100);
+    const child = await spawnHost(args.exe, args);
+    console.log(`[Deno] Spawned host: pid=${child.pid}`);
+    try {
+      overlay.SetOverlayRenderingPid(overlayHandle, child.pid);
+      console.log(`[Deno] SetOverlayRenderingPid -> ${child.pid}`);
+    } catch (e) {
+      console.warn("[Deno] Failed to SetOverlayRenderingPid:", e);
     }
-  } finally {
-    try { child.kill("SIGKILL"); } catch { /* ignore */ }
+
+    try {
+      let running = true;
+      addEventListener("SIGINT", () => { running = false; try { child.kill("SIGTERM"); } catch { /* ignore */ } });
+      const start = performance.now();
+      while (running) {
+        const now = performance.now();
+        const t = (now - start) / 1000;
+        /* try {
+          setOverlayTransformAnimated(overlay, overlayHandle, t);
+        } catch (e) {
+          console.warn("[Deno] Failed to animate overlay transform:", e);
+        } */
+        overlay.WaitFrameSync(100);
+      }
+    } finally {
+      try { child.kill("SIGKILL"); } catch { /* ignore */ }
+    }
+  } else {
+    console.log("[Deno] Desktop test mode (no OpenVR overlay):", args);
+    const child = await spawnHost(args.exe, args);
+    addEventListener("SIGINT", () => { try { child.kill("SIGTERM"); } catch { /* ignore */ } });
+    const status = await child.status;
+    console.log(`[Deno] Host exited: code=${status.code}, signal=${status.signal ?? "none"}`);
   }
 }
