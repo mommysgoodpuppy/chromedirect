@@ -23,6 +23,8 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cctype>
+#include <cstdint>
+#include <vector>
 
 // Configuration (runtime via flags)
 static bool g_enable_vr_mode = false; // --vr-mode=true to enable OpenVR presenter
@@ -279,42 +281,38 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       if (stage_ >= 5 && !stage5_registered_) {
         class Stage5Handler : public CefV8Handler {
          public:
-          Stage5Handler() = default;
+          explicit Stage5Handler(MinimalRenderHandler* owner) : owner_(owner) {}
           bool Execute(const CefString& name,
                        CefRefPtr<CefV8Value> /*object*/,
-                       const CefV8ValueList& arguments,
+                       const CefV8ValueList& /*arguments*/,
                        CefRefPtr<CefV8Value>& retval,
-                       CefString& exception) override {
-            if (name == "__stage5Echo") {
-              if (!arguments.empty() && arguments[0]->IsString()) {
-                retval = CefV8Value::CreateString(arguments[0]->GetStringValue());
-              } else {
-                retval = CefV8Value::CreateString("");
-              }
+                       CefString& /*exception*/) override {
+            if (!owner_) return false;
+            if (name == "__stage5GetPose") {
+              retval = owner_->HasPose() ? owner_->CreatePoseValue()
+                                         : CefV8Value::CreateNull();
               return true;
             }
-            if (name == "__stage5Add") {
-              double a = (arguments.size() > 0 && arguments[0]->IsDouble()) ? arguments[0]->GetDoubleValue() : 0.0;
-              double b = (arguments.size() > 1 && arguments[1]->IsDouble()) ? arguments[1]->GetDoubleValue() : 0.0;
-              retval = CefV8Value::CreateDouble(a + b);
+            if (name == "__stage5HasPose") {
+              retval = CefV8Value::CreateBool(owner_->HasPose());
               return true;
             }
-            exception = "unknown stage5 native call";
             return false;
           }
 
          private:
+          MinimalRenderHandler* owner_;
           IMPLEMENT_REFCOUNTING(Stage5Handler);
         };
 
         const char* kStage5JS =
           "if (!cefExt) var cefExt = {};\n"
           "if (!cefExt.stage5) cefExt.stage5 = {};\n"
-          "native function __stage5Echo();\n"
-          "native function __stage5Add();\n"
-          "cefExt.stage5.echo = function(msg){ return __stage5Echo(msg); };\n"
-          "cefExt.stage5.add = function(a,b){ return __stage5Add(a,b); };\n";
-        CefRegisterExtension("v8/cef_stage5", kStage5JS, new Stage5Handler());
+          "native function __stage5GetPose();\n"
+          "native function __stage5HasPose();\n"
+          "cefExt.stage5.getPose = function(){ return __stage5GetPose(); };\n"
+          "cefExt.stage5.hasPose = function(){ return __stage5HasPose(); };\n";
+        CefRegisterExtension("v8/cef_stage5", kStage5JS, new Stage5Handler(this));
         stage5_registered_ = true;
       }
     }
@@ -324,33 +322,147 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       // Post a simple log to the browser process to prove renderer is alive (only if staged).
       if (!frame.get()) return;
 
-      // Stage info and optional context interaction.
-      CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
-      int stage = stage_;
-      if (stage == 0 && cmd.get() && cmd->HasSwitch("v8-ext-stage")) {
-        stage = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
-      }
+      int stage = ResolveStage();
       if (stage > 0) {
         CefRefPtr<CefProcessMessage> pm0 = CefProcessMessage::Create("RB_LOG");
         pm0->GetArgumentList()->SetString(0, "ext-stage1: OnContextCreated");
         frame->SendProcessMessage(PID_BROWSER, pm0);
-      }
-      // Report stage and ext_registered_ to browser only if stage>0
-      if (stage > 0) {
+
         CefRefPtr<CefProcessMessage> pm = CefProcessMessage::Create("RB_LOG");
         std::string info = std::string("ext-stage info: stage=") + std::to_string(stage) +
                            " main=" + (frame->IsMain()?"1":"0") +
-                           " ext_registered=" + (ext_registered_?"1":"0");
+                           " ext_registered=" + (ext_registered_?"1":"0") +
+                           " stage5_pose=" + (has_pose_?"1":"0");
         pm->GetArgumentList()->SetString(0, info);
         frame->SendProcessMessage(PID_BROWSER, pm);
       }
       // Do not modify the context at stage 3; rely solely on CefRegisterExtension.
     }
+
+    bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                  CefRefPtr<CefFrame> frame,
+                                  CefProcessId source_process,
+                                  CefRefPtr<CefProcessMessage> message) override {
+      if (!message.get()) return false;
+      if (message->GetName() != "VR_STATE") return false;
+      if (ResolveStage() < 5) return false;
+
+      auto args = message->GetArgumentList();
+      if (!args.get() || args->GetSize() < 1 || args->GetType(0) != VTYPE_BINARY) return false;
+      CefRefPtr<CefBinaryValue> bin = args->GetBinary(0);
+      size_t len = bin->GetSize();
+      if (len < sizeof(float) * (3 + 4) * 3) return false;
+      std::vector<char> buf(len);
+      bin->GetData(buf.data(), len, 0);
+      const float* pf = reinterpret_cast<const float*>(buf.data());
+
+      const float* hmd_pos = pf + 0;
+      const float* hmd_quat = pf + 3;
+      const float* left_pos = pf + 7;
+      const float* left_quat = pf + 10;
+      const float* right_pos = pf + 14;
+      const float* right_quat = pf + 17;
+
+      pose_sequence_++;
+      for (int i = 0; i < 3; ++i) {
+        last_pose_.hmd_pos[i] = hmd_pos[i];
+        last_pose_.left_pos[i] = left_pos[i];
+        last_pose_.right_pos[i] = right_pos[i];
+      }
+      for (int i = 0; i < 4; ++i) {
+        last_pose_.hmd_quat[i] = hmd_quat[i];
+        last_pose_.left_quat[i] = left_quat[i];
+        last_pose_.right_quat[i] = right_quat[i];
+      }
+      last_pose_.sequence = pose_sequence_;
+      has_pose_ = true;
+
+      if (pose_sequence_ == 1 || (pose_sequence_ % 120) == 0) {
+        std::cout << "[MinimalRenderHandler] Pose updated seq=" << pose_sequence_
+                  << " hmd.pos=(" << last_pose_.hmd_pos[0] << ", "
+                  << last_pose_.hmd_pos[1] << ", " << last_pose_.hmd_pos[2]
+                  << ")" << std::endl;
+      }
+      return true;
+    }
+
     IMPLEMENT_REFCOUNTING(MinimalRenderHandler);
    private:
+    struct PoseSample {
+      double hmd_pos[3] = {0};
+      double hmd_quat[4] = {0, 0, 0, 1};
+      double left_pos[3] = {0};
+      double left_quat[4] = {0, 0, 0, 1};
+      double right_pos[3] = {0};
+      double right_quat[4] = {0, 0, 0, 1};
+      uint64_t sequence = 0;
+    };
+
+   public:
+    CefRefPtr<CefV8Value> CreatePoseValue() const {
+      if (!has_pose_) {
+        return CefV8Value::CreateNull();
+      }
+
+      auto makeVec = [](const double* p3) {
+        CefRefPtr<CefV8Value> arr = CefV8Value::CreateArray(3);
+        arr->SetValue(0, CefV8Value::CreateDouble(p3[0]));
+        arr->SetValue(1, CefV8Value::CreateDouble(p3[1]));
+        arr->SetValue(2, CefV8Value::CreateDouble(p3[2]));
+        return arr;
+      };
+      auto makeQuat = [](const double* q4) {
+        CefRefPtr<CefV8Value> arr = CefV8Value::CreateArray(4);
+        arr->SetValue(0, CefV8Value::CreateDouble(q4[0]));
+        arr->SetValue(1, CefV8Value::CreateDouble(q4[1]));
+        arr->SetValue(2, CefV8Value::CreateDouble(q4[2]));
+        arr->SetValue(3, CefV8Value::CreateDouble(q4[3]));
+        return arr;
+      };
+
+      CefRefPtr<CefV8Value> state = CefV8Value::CreateObject(nullptr, nullptr);
+      {
+        CefRefPtr<CefV8Value> hmd = CefV8Value::CreateObject(nullptr, nullptr);
+        hmd->SetValue("pos", makeVec(last_pose_.hmd_pos), V8_PROPERTY_ATTRIBUTE_NONE);
+        hmd->SetValue("quat", makeQuat(last_pose_.hmd_quat), V8_PROPERTY_ATTRIBUTE_NONE);
+        state->SetValue("hmd", hmd, V8_PROPERTY_ATTRIBUTE_NONE);
+      }
+      {
+        CefRefPtr<CefV8Value> left = CefV8Value::CreateObject(nullptr, nullptr);
+        left->SetValue("pos", makeVec(last_pose_.left_pos), V8_PROPERTY_ATTRIBUTE_NONE);
+        left->SetValue("quat", makeQuat(last_pose_.left_quat), V8_PROPERTY_ATTRIBUTE_NONE);
+        state->SetValue("left", left, V8_PROPERTY_ATTRIBUTE_NONE);
+      }
+      {
+        CefRefPtr<CefV8Value> right = CefV8Value::CreateObject(nullptr, nullptr);
+        right->SetValue("pos", makeVec(last_pose_.right_pos), V8_PROPERTY_ATTRIBUTE_NONE);
+        right->SetValue("quat", makeQuat(last_pose_.right_quat), V8_PROPERTY_ATTRIBUTE_NONE);
+        state->SetValue("right", right, V8_PROPERTY_ATTRIBUTE_NONE);
+      }
+      state->SetValue("sequence",
+                      CefV8Value::CreateDouble(static_cast<double>(last_pose_.sequence)),
+                      V8_PROPERTY_ATTRIBUTE_NONE);
+      return state;
+    }
+
+    bool HasPose() const { return has_pose_; }
+
+   private:
+    int ResolveStage() {
+      if (stage_ > 0) return stage_;
+      CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
+      if (cmd.get() && cmd->HasSwitch("v8-ext-stage")) {
+        stage_ = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
+      }
+      return stage_;
+    }
+
     int stage_;
     bool ext_registered_;
     bool stage5_registered_;
+    PoseSample last_pose_{};
+    bool has_pose_ = false;
+    uint64_t pose_sequence_ = 0;
   };
   // Initialize the minimal handler instance so SimpleApp can return it when staged.
   if (!g_minimal_handler.get()) g_minimal_handler = new MinimalRenderHandler();

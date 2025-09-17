@@ -140,11 +140,15 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   // Real OpenVR pose -> page via iwerBridge.applyPose (browser-side injection)
   // Enabled with --iwer-apply-pose[=ms] (defaults to 11ms when vr_mode_)
   int pose_ms = 0;
+  int stage_switch = 0;
   if (cmd.get()) {
+    if (cmd->HasSwitch("v8-ext-stage")) {
+      stage_switch = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
+    }
     if (cmd->HasSwitch("iwer-apply-pose")) {
       pose_ms = std::max(5, atoi(cmd->GetSwitchValue("iwer-apply-pose").ToString().c_str()));
       if (pose_ms <= 0) pose_ms = 11;
-    } else if (vr_mode_ && cmd->HasSwitch("enable-iwer-bridge")) {
+    } else if (vr_mode_ && (cmd->HasSwitch("enable-iwer-bridge") || stage_switch >= 5)) {
       pose_ms = 11;
     }
   }
@@ -238,8 +242,11 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     CefPostDelayedTask(TID_UI, new VrPoseTask(this, pose_ms), pose_ms);
   }
   const bool bridge_flag = cmd.get() && cmd->HasSwitch("enable-iwer-bridge");
-  if (bridge_flag) {
-    std::cout << "[Client] IWER pose bridge enabled (" << (vr_mode_ ? "OpenVR" : "desktop synthetic") << ")\n";
+  const bool stage5_bridge = stage_switch >= 5;
+  if (bridge_flag || stage5_bridge) {
+    const char* source = bridge_flag ? "--enable-iwer-bridge" : "--v8-ext-stage>=5";
+    std::cout << "[Client] IWER pose bridge enabled via " << source
+              << " (" << (vr_mode_ ? "OpenVR" : "desktop synthetic") << ")\n";
   }
 
   // Desktop-mode synthetic pose: drive iwerBridge.applyPose via ExecuteJavaScript without renderer bridge.
@@ -425,7 +432,16 @@ bool OffscreenClient::SendPoseToRenderer(CefRefPtr<CefFrame> frame,
                                          const float* right_pos,
                                          const float* right_quat) {
   CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
-  if (!cmd.get() || !cmd->HasSwitch("enable-iwer-bridge")) {
+  bool allow_native = false;
+  int stage_switch = 0;
+  if (cmd.get()) {
+    allow_native = cmd->HasSwitch("enable-iwer-bridge");
+    if (cmd->HasSwitch("v8-ext-stage")) {
+      stage_switch = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
+      if (stage_switch >= 5) allow_native = true;
+    }
+  }
+  if (!allow_native) {
     return false;
   }
   if (!frame.get()) {
