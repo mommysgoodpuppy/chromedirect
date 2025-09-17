@@ -6,6 +6,7 @@
 #include <include/cef_life_span_handler.h>
 #include <include/cef_display_handler.h>
 #include <include/cef_request_handler.h>
+#include <include/cef_load_handler.h>
 #include <windows.h>
 #include <memory>
 #include <atomic>
@@ -15,7 +16,8 @@ class OffscreenClient final : public CefClient,
                               public CefLifeSpanHandler,
                               public CefRenderHandler,
                               public CefDisplayHandler,
-                              public CefRequestHandler {
+                              public CefRequestHandler,
+                              public CefLoadHandler {
 public:
   OffscreenClient(HWND host_window, std::shared_ptr<Presenter> presenter, int width, int height, float scale = 1.0f, int frame_rate = 60);
 
@@ -24,6 +26,7 @@ public:
   CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
+  CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
   bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
                                 CefProcessId source_process,
@@ -62,6 +65,11 @@ public:
                       CefRefPtr<CefRequest> request,
                       bool user_gesture,
                       bool is_redirect) override;
+
+  // CefLoadHandler
+  void OnLoadEnd(CefRefPtr<CefBrowser> browser,
+                 CefRefPtr<CefFrame> frame,
+                 int httpStatusCode) override;
 
   HWND GetHostHwnd() const { return host_window_; }
   CefRefPtr<CefBrowser> GetBrowser() const { return browser_; }

@@ -64,6 +64,8 @@ set(APP_SOURCES
   src/D3DPresenter.cpp
   src/OpenVRPresenter.h
   src/OpenVRPresenter.cpp
+  src/RendererBridge.h
+  src/RendererBridge.cpp
 )
 
 # Create the executable target

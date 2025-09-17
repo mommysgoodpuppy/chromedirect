@@ -7,8 +7,10 @@
 #include <include/cef_command_line.h>
 #include <include/cef_sandbox_win.h>
 #include <include/wrapper/cef_helpers.h>
+#include <include/cef_render_process_handler.h>
 #include <include/wrapper/cef_closure_task.h>
 #include <include/wrapper/cef_library_loader.h>
+#include "RendererBridge.h"
 
 #include <windows.h>
 #include <string>
@@ -67,10 +69,80 @@ class SimpleApp : public CefApp {
     // Smooth scheduling for OSR
     if (!command_line->HasSwitch("enable-begin-frame-scheduling"))
       command_line->AppendSwitch("enable-begin-frame-scheduling");
+    if (!command_line->HasSwitch("remote-debugging-port"))
+      command_line->AppendSwitchWithValue("remote-debugging-port", "9333");
   }
+  // Provide a browser-process handler to pass flags to child processes.
+  CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override;
+  // Provide a render-process handler to register test extensions when staged.
+  CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override;
 
   IMPLEMENT_REFCOUNTING(SimpleApp);
+ };
+
+class SimpleBrowserHandler : public CefBrowserProcessHandler {
+ public:
+  void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> command_line) override {
+    // Propagate testing/dev switches into child (renderer) processes so the render handler can see them.
+    CefRefPtr<CefCommandLine> gl = CefCommandLine::GetGlobalCommandLine();
+    if (gl.get()) {
+      // Ensure OSR/GPU flags also apply to child processes when a separate render app is used.
+      if (!command_line->HasSwitch("off-screen-rendering-enabled"))
+        command_line->AppendSwitch("off-screen-rendering-enabled");
+      if (!command_line->HasSwitch("enable-gpu"))
+        command_line->AppendSwitch("enable-gpu");
+      if (!command_line->HasSwitch("use-angle"))
+        command_line->AppendSwitchWithValue("use-angle", "d3d11");
+      if (!command_line->HasSwitch("disable-gpu-sandbox"))
+        command_line->AppendSwitch("disable-gpu-sandbox");
+      if (!command_line->HasSwitch("disable-gpu-vsync"))
+        command_line->AppendSwitch("disable-gpu-vsync");
+      if (!command_line->HasSwitch("disable-frame-rate-limit"))
+        command_line->AppendSwitch("disable-frame-rate-limit");
+      if (!command_line->HasSwitch("enable-begin-frame-scheduling"))
+        command_line->AppendSwitch("enable-begin-frame-scheduling");
+
+      if (gl->HasSwitch("v8-ext-stage") && !command_line->HasSwitch("v8-ext-stage")) {
+        command_line->AppendSwitchWithValue("v8-ext-stage", gl->GetSwitchValue("v8-ext-stage"));
+      }
+      if (gl->HasSwitch("disable-iwer-extension") && !command_line->HasSwitch("disable-iwer-extension")) {
+        command_line->AppendSwitch("disable-iwer-extension");
+      }
+      if (gl->HasSwitch("v8-ping") && !command_line->HasSwitch("v8-ping")) {
+        command_line->AppendSwitchWithValue("v8-ping", gl->GetSwitchValue("v8-ping"));
+      }
+      if (gl->HasSwitch("v8-post-vr") && !command_line->HasSwitch("v8-post-vr")) {
+        command_line->AppendSwitchWithValue("v8-post-vr", gl->GetSwitchValue("v8-post-vr"));
+      }
+      if (gl->HasSwitch("enable-iwer-bridge") && !command_line->HasSwitch("enable-iwer-bridge")) {
+        command_line->AppendSwitch("enable-iwer-bridge");
+      }
+    }
+  }
+  IMPLEMENT_REFCOUNTING(SimpleBrowserHandler);
 };
+
+// Return a static instance
+CefRefPtr<CefBrowserProcessHandler> SimpleApp::GetBrowserProcessHandler() {
+  static CefRefPtr<SimpleBrowserHandler> s_handler = new SimpleBrowserHandler();
+  return s_handler;
+}
+// Forward declare handler singletons and select via flags at runtime.
+namespace {
+  CefRefPtr<CefRenderProcessHandler> g_minimal_handler; // created below
+  CefRefPtr<CefRenderProcessHandler> g_iwer_handler;    // RendererBridge
+}
+CefRefPtr<CefRenderProcessHandler> SimpleApp::GetRenderProcessHandler() {
+  CefRefPtr<CefCommandLine> gl = CefCommandLine::GetGlobalCommandLine();
+  if (gl.get() && gl->HasSwitch("enable-iwer-bridge")) {
+    if (!g_iwer_handler.get()) g_iwer_handler = new RendererBridge();
+    return g_iwer_handler;
+  }
+  if (gl.get() && gl->HasSwitch("v8-ext-stage")) {
+    return g_minimal_handler; // initialized later
+  }
+  return nullptr;
+}
 
 // Signal handler for Ctrl+C
 static void SignalHandler(int signal) {
@@ -139,7 +211,98 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   void* sandbox_info = nullptr;
 #endif
 
-  const int exit_code = CefExecuteProcess(main_args, nullptr, sandbox_info);
+  // Optionally enable a minimal render-process handler for incremental V8 testing.
+  // The handler is always available, and will self-gate via --v8-ext-stage.
+  CefRefPtr<CefCommandLine> pre_cmd = CefCommandLine::CreateCommandLine();
+  pre_cmd->InitFromString(::GetCommandLineW());
+
+  class MinimalRenderHandler : public CefRenderProcessHandler {
+   public:
+    MinimalRenderHandler() : stage_(0), ext_registered_(false) {}
+    void OnWebKitInitialized() override {
+      // Stage 2+: Register a trivial JS-only extension that defines window.cefExt.ping
+      CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
+      stage_ = 0;
+      if (cmd.get() && cmd->HasSwitch("v8-ext-stage")) {
+        stage_ = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
+      }
+      // Defer true CefRegisterExtension to stage >= 3 only. Stage 2 uses safe JS injection in OnContextCreated.
+      if (stage_ >= 3 && !ext_registered_) {
+        // Minimal ES5 global attach; no window/this usage.
+        const char* kExtJS =
+          "if (!cefExt) var cefExt = {};\n"
+          "if (!cefExt.ping) cefExt.ping = function(x){ return (x||0)+1; };\n";
+        const bool ok = CefRegisterExtension("v8/cef_ext_ping", kExtJS, nullptr);
+        ext_registered_ = ok;
+      }
+      // Stage 4+: Provide a minimal pose bridge API for IWER.
+      if (stage_ >= 4) {
+        const char* kPoseJS =
+          "if (!iwerBridge) var iwerBridge = {};\n"
+          "if (!iwerBridge.applyPose) iwerBridge.applyPose = function(s){\n"
+          "  try {\n"
+          "    var g = (typeof window !== 'undefined') ? window : this;\n"
+          "    var d = g && g.xrDevice ? g.xrDevice : null;\n"
+          "    if (!d) return false;\n"
+          "    if (s && s.hmd) {\n"
+          "      if (s.hmd.pos && d.position && d.position.set) d.position.set(s.hmd.pos[0], s.hmd.pos[1], s.hmd.pos[2]);\n"
+          "      if (s.hmd.quat && d.quaternion && d.quaternion.set) d.quaternion.set(s.hmd.quat[0], s.hmd.quat[1], s.hmd.quat[2], s.hmd.quat[3]);\n"
+          "    }\n"
+          "    if (d.controllers) {\n"
+          "      var L=d.controllers['left'], R=d.controllers['right'];\n"
+          "      if (L && s && s.left) {\n"
+          "        if (s.left.pos && L.position && L.position.set) L.position.set(s.left.pos[0], s.left.pos[1], s.left.pos[2]);\n"
+          "        if (s.left.quat && L.quaternion && L.quaternion.set) L.quaternion.set(s.left.quat[0], s.left.quat[1], s.left.quat[2], s.left.quat[3]);\n"
+          "      }\n"
+          "      if (R && s && s.right) {\n"
+          "        if (s.right.pos && R.position && R.position.set) R.position.set(s.right.pos[0], s.right.pos[1], s.right.pos[2]);\n"
+          "        if (s.right.quat && R.quaternion && R.quaternion.set) R.quaternion.set(s.right.quat[0], s.right.quat[1], s.right.quat[2], s.right.quat[3]);\n"
+          "      }\n"
+          "    }\n"
+          "    return true;\n"
+          "  } catch(e){ return false; }\n"
+          "};\n";
+        CefRegisterExtension("v8/iwer_pose", kPoseJS, nullptr);
+      }
+    }
+    void OnContextCreated(CefRefPtr<CefBrowser> browser,
+                          CefRefPtr<CefFrame> frame,
+                          CefRefPtr<CefV8Context> context) override {
+      // Post a simple log to the browser process to prove renderer is alive (only if staged).
+      if (!frame.get()) return;
+
+      // Stage info and optional context interaction.
+      CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
+      int stage = stage_;
+      if (stage == 0 && cmd.get() && cmd->HasSwitch("v8-ext-stage")) {
+        stage = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
+      }
+      if (stage > 0) {
+        CefRefPtr<CefProcessMessage> pm0 = CefProcessMessage::Create("RB_LOG");
+        pm0->GetArgumentList()->SetString(0, "ext-stage1: OnContextCreated");
+        frame->SendProcessMessage(PID_BROWSER, pm0);
+      }
+      // Report stage and ext_registered_ to browser only if stage>0
+      if (stage > 0) {
+        CefRefPtr<CefProcessMessage> pm = CefProcessMessage::Create("RB_LOG");
+        std::string info = std::string("ext-stage info: stage=") + std::to_string(stage) +
+                           " main=" + (frame->IsMain()?"1":"0") +
+                           " ext_registered=" + (ext_registered_?"1":"0");
+        pm->GetArgumentList()->SetString(0, info);
+        frame->SendProcessMessage(PID_BROWSER, pm);
+      }
+      // Do not modify the context at stage 3; rely solely on CefRegisterExtension.
+    }
+    IMPLEMENT_REFCOUNTING(MinimalRenderHandler);
+   private:
+    int stage_;
+    bool ext_registered_;
+  };
+  // Initialize the minimal handler instance so SimpleApp can return it when staged.
+  if (!g_minimal_handler.get()) g_minimal_handler = new MinimalRenderHandler();
+  // Use a single app implementation for all processes.
+  CefRefPtr<SimpleApp> app = new SimpleApp();
+  const int exit_code = CefExecuteProcess(main_args, app, sandbox_info);
   if (exit_code >= 0) {
     // The sub-process has completed, so return here.
     // DON'T allocate console for sub-processes to avoid multiple windows
@@ -170,7 +333,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   std::string overlay_key = "cef.web.overlay";
   std::string start_url = "https://www.google.com";
   int target_fps = 120; // default higher than 60 to unlock
-  bool stereo_panorama_flag = false;
+  bool stereo_panorama_flag = true; // default to stereo panorama
   bool shader_panorama = false;
   float fov_deg = 90.0f; // total FOV; half used in shader
   bool warp_follow_head = false;
@@ -264,6 +427,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   settings.log_severity = LOGSEVERITY_VERBOSE;
   settings.external_message_pump = false; // use CEF's built-in message loop
   settings.background_color = CefColorSetARGB(0, 0, 0, 0);
+  // Enable DevTools discovery for OSR targets
+  settings.remote_debugging_port = 9333;
   
   // Set explicit paths relative to the executable directory so the app runs from any build folder
   wchar_t exePathW[MAX_PATH] = {0};
@@ -283,7 +448,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
   // Initialize CEF before creating presenters
   std::cout << "[CEF Demo] Initializing CEF...\n";
-  CefRefPtr<CefApp> app = new SimpleApp();
   if (!CefInitialize(main_args, settings, app, sandbox_info)) {
     std::cerr << "[CEF Demo] ERROR: CEF initialization failed!\n";
     std::cerr << "[CEF Demo] Check cef_detailed.log for details\n";

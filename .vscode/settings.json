@@ -78,7 +78,8 @@
     "xmemory": "cpp",
     "xtr1common": "cpp",
     "chrono": "cpp",
-    "forward_list": "cpp"
+    "forward_list": "cpp",
+    "filesystem": "cpp"
   },
   "deno.enable": true,
   "liveServer.settings.port": 5501

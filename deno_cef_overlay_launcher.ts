@@ -24,6 +24,9 @@ type Args = {
   disableIwerExtension?: boolean; // if true, do not inject iwer extension
   v8Ping?: number; // ms; if set, pings page via ExecuteJavaScript
   v8PostVr?: number; // ms; if set, posts dummy VR state to page
+  v8ExtStage?: number; // integer stage to enable minimal render handler
+  enableIwerBridge?: boolean; // enable pose bridge
+  iwerApplyPose?: number; // ms; browser-side applyPose timer
 };
 
 function parseArgs(): Args {
@@ -57,6 +60,9 @@ function parseArgs(): Args {
       case "disable-iwer-extension": out.disableIwerExtension = (v === "1" || v === "true"); break;
       case "v8-ping": out.v8Ping = Math.max(50, Number(v) || 1000); break;
       case "v8-post-vr": out.v8PostVr = Math.max(50, Number(v) || 1000); break;
+      case "v8-ext-stage": out.v8ExtStage = Math.max(1, Number(v) || 1); break;
+      case "enable-iwer-bridge": out.enableIwerBridge = (v === "1" || v === "true" || v === ""); break;
+      case "iwer-apply-pose": out.iwerApplyPose = Math.max(5, Number(v) || 11); break;
     }
   }
   // Default URL to local index.html via file:// if none provided
@@ -169,6 +175,9 @@ async function spawnHost(exe: string, args: Args) {
     ...(args.disableIwerExtension ? ["--disable-iwer-extension"] : []),
     ...(args.v8Ping ? [`--v8-ping=${args.v8Ping}`] : []),
     ...(args.v8PostVr ? [`--v8-post-vr=${args.v8PostVr}`] : []),
+    ...(args.v8ExtStage ? [`--v8-ext-stage=${args.v8ExtStage}`] : []),
+    ...(args.enableIwerBridge ? ["--enable-iwer-bridge"] : []),
+    ...(args.iwerApplyPose ? [`--iwer-apply-pose=${args.iwerApplyPose}`] : []),
     ...(args.fps ? [`--fps=${args.fps}`] : []),
     ...(args.shaderPanorama ? ["--shader-panorama=true"] : []),
     ...(args.stereoPanoramaFlag ? ["--overlay-stereo-panorama=true"] : []),

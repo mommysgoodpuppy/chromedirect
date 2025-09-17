@@ -12,6 +12,7 @@
 #include <iostream>
 #include <algorithm>
 #include <cstring>
+#include <openvr.h>
 
 OffscreenClient::OffscreenClient(HWND host_window, std::shared_ptr<Presenter> presenter, int width, int height, float scale, int frame_rate)
     : host_window_(host_window), presenter_(std::move(presenter)), width_(width), height_(height), scale_(scale), frame_rate_(frame_rate) {
@@ -119,6 +120,140 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
       IMPLEMENT_REFCOUNTING(VrTask);
     };
     CefPostDelayedTask(TID_UI, new VrTask(this), v8_vr_ms_);
+  }
+
+  // Real OpenVR pose -> page via iwerBridge.applyPose (browser-side injection)
+  // Enabled with --iwer-apply-pose[=ms] or with --enable-iwer-bridge (defaults to 11ms)
+  int pose_ms = 0;
+  if (cmd.get()) {
+    if (cmd->HasSwitch("iwer-apply-pose")) {
+      pose_ms = std::max(5, atoi(cmd->GetSwitchValue("iwer-apply-pose").ToString().c_str()));
+      if (pose_ms <= 0) pose_ms = 11;
+    } else if (cmd->HasSwitch("enable-iwer-bridge")) {
+      pose_ms = 11; // ~90Hz
+    }
+  }
+  if (pose_ms > 0) {
+    class VrPoseTask : public CefTask {
+     public:
+      VrPoseTask(CefRefPtr<OffscreenClient> c, int ms) : client_(c), ms_(ms) {}
+      static void ToPosQuat(const vr::HmdMatrix34_t& m, float pos[3], float quat[4]) {
+        pos[0] = m.m[0][3]; pos[1] = m.m[1][3]; pos[2] = m.m[2][3];
+        // 3x3 rotation -> quaternion (row-major)
+        float r00 = m.m[0][0], r01 = m.m[0][1], r02 = m.m[0][2];
+        float r10 = m.m[1][0], r11 = m.m[1][1], r12 = m.m[1][2];
+        float r20 = m.m[2][0], r21 = m.m[2][1], r22 = m.m[2][2];
+        float trace = r00 + r11 + r22;
+        if (trace > 0.0f) {
+          float S = sqrtf(trace + 1.0f) * 2.0f;
+          quat[3] = 0.25f * S; // w
+          quat[0] = (r21 - r12) / S; // x
+          quat[1] = (r02 - r20) / S; // y
+          quat[2] = (r10 - r01) / S; // z
+        } else if ((r00 > r11) && (r00 > r22)) {
+          float S = sqrtf(1.0f + r00 - r11 - r22) * 2.0f;
+          quat[3] = (r21 - r12) / S;
+          quat[0] = 0.25f * S;
+          quat[1] = (r01 + r10) / S;
+          quat[2] = (r02 + r20) / S;
+        } else if (r11 > r22) {
+          float S = sqrtf(1.0f + r11 - r00 - r22) * 2.0f;
+          quat[3] = (r02 - r20) / S;
+          quat[0] = (r01 + r10) / S;
+          quat[1] = 0.25f * S;
+          quat[2] = (r12 + r21) / S;
+        } else {
+          float S = sqrtf(1.0f + r22 - r00 - r11) * 2.0f;
+          quat[3] = (r10 - r01) / S;
+          quat[0] = (r02 + r20) / S;
+          quat[1] = (r12 + r21) / S;
+          quat[2] = 0.25f * S;
+        }
+      }
+      void Execute() override {
+        CEF_REQUIRE_UI_THREAD();
+        if (!client_.get()) return;
+        auto br = client_->GetBrowser();
+        if (!br.get()) return;
+        auto frame = br->GetMainFrame();
+        if (!frame.get()) return;
+        if (!vr::VRSystem()) { CefPostDelayedTask(TID_UI, this, ms_); return; }
+        vr::TrackedDevicePose_t poses[vr::k_unMaxTrackedDeviceCount] = {};
+        vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, 0, poses, vr::k_unMaxTrackedDeviceCount);
+        float hPos[3]={0}, hQuat[4]={0,0,0,1};
+        float lPos[3]={0}, lQuat[4]={0,0,0,1};
+        float rPos[3]={0}, rQuat[4]={0,0,0,1};
+        // HMD
+        if (poses[vr::k_unTrackedDeviceIndex_Hmd].bPoseIsValid) {
+          ToPosQuat(poses[vr::k_unTrackedDeviceIndex_Hmd].mDeviceToAbsoluteTracking, hPos, hQuat);
+        }
+        // Controllers
+        for (vr::TrackedDeviceIndex_t i=0;i<vr::k_unMaxTrackedDeviceCount;++i) {
+          if (!poses[i].bPoseIsValid) continue;
+          if (vr::VRSystem()->GetTrackedDeviceClass(i) != vr::TrackedDeviceClass_Controller) continue;
+          auto role = vr::VRSystem()->GetControllerRoleForTrackedDeviceIndex(i);
+          if (role == vr::TrackedControllerRole_LeftHand) {
+            ToPosQuat(poses[i].mDeviceToAbsoluteTracking, lPos, lQuat);
+          } else if (role == vr::TrackedControllerRole_RightHand) {
+            ToPosQuat(poses[i].mDeviceToAbsoluteTracking, rPos, rQuat);
+          }
+        }
+        // Build JS call (avoid JSON.stringify to keep it minimal here)
+        char js[1024];
+        snprintf(js, sizeof(js),
+          "(function(){try{ if(window.iwerBridge&&typeof iwerBridge.applyPose==='function'){ iwerBridge.applyPose({hmd:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}, left:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}, right:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}}); } }catch(e){} })();",
+          hPos[0],hPos[1],hPos[2], hQuat[0],hQuat[1],hQuat[2],hQuat[3],
+          lPos[0],lPos[1],lPos[2], lQuat[0],lQuat[1],lQuat[2],lQuat[3],
+          rPos[0],rPos[1],rPos[2], rQuat[0],rQuat[1],rQuat[2],rQuat[3]);
+        frame->ExecuteJavaScript(js, "", 0);
+        CefPostDelayedTask(TID_UI, this, ms_);
+      }
+     private:
+      CefRefPtr<OffscreenClient> client_;
+      int ms_;
+      IMPLEMENT_REFCOUNTING(VrPoseTask);
+    };
+    CefPostDelayedTask(TID_UI, new VrPoseTask(this, pose_ms), pose_ms);
+  }
+  // If iwer bridge is enabled, send a periodic VR_STATE message to renderer (demo pose).
+  if (cmd.get() && cmd->HasSwitch("enable-iwer-bridge")) {
+    class VrStateMsgTask : public CefTask {
+     public:
+      explicit VrStateMsgTask(CefRefPtr<OffscreenClient> c) : client_(c) {}
+      void Execute() override {
+        CEF_REQUIRE_UI_THREAD();
+        if (!client_.get()) return;
+        auto br = client_->GetBrowser();
+        if (!br.get()) return;
+        auto frame = br->GetMainFrame();
+        if (!frame.get()) return;
+        static int tick = 0; tick++;
+        const double t = tick * (1.0/90.0);
+        // Build 21 floats: hmd pos(3)+quat(4), left pos+quat, right pos+quat
+        float data[21] = {0};
+        // Simple animated HMD around (0,1.6, -1.5)
+        data[0] = 0.25f * (float)sin(t); // x
+        data[1] = 1.6f;                  // y
+        data[2] = -1.5f + 0.25f * (float)cos(t); // z
+        data[3] = 0; data[4] = 0; data[5] = 0; data[6] = 1; // quat
+        // Left controller near (-0.3,1.4,-1.3)
+        data[7] = -0.3f; data[8] = 1.4f; data[9] = -1.3f;
+        data[10]= 0; data[11]= 0; data[12]= 0; data[13]= 1;
+        // Right controller near (0.3,1.4,-1.3)
+        data[14]= 0.3f; data[15]= 1.4f; data[16]= -1.3f;
+        data[17]= 0; data[18]= 0; data[19]= 0; data[20]= 1;
+        CefRefPtr<CefBinaryValue> bin = CefBinaryValue::Create(data, sizeof(data));
+        CefRefPtr<CefProcessMessage> pm = CefProcessMessage::Create("VR_STATE");
+        pm->GetArgumentList()->SetBinary(0, bin);
+        frame->SendProcessMessage(PID_RENDERER, pm);
+        // Reschedule ~90Hz
+        CefPostDelayedTask(TID_UI, this, 11);
+      }
+     private:
+      CefRefPtr<OffscreenClient> client_;
+      IMPLEMENT_REFCOUNTING(VrStateMsgTask);
+    };
+    CefPostTask(TID_UI, new VrStateMsgTask(this));
   }
 }
 
@@ -248,9 +383,48 @@ bool OffscreenClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                                CefProcessId source_process,
                                                CefRefPtr<CefProcessMessage> message) {
   CEF_REQUIRE_UI_THREAD();
-  // For now we don't handle any renderer->browser messages in this build.
-  // This override exists to satisfy the declaration and allow future use.
+  const std::string name = message->GetName();
+  if (name == "RB_LOG") {
+    auto args = message->GetArgumentList();
+    std::string s = (args.get() && args->GetSize() > 0 && args->GetType(0) == VTYPE_STRING)
+                      ? args->GetString(0).ToString()
+                      : std::string();
+    std::cout << "[Renderer->Browser][RB_LOG] " << s << "\n";
+    return true; // handled
+  }
+  if (name == "RB_POSE") {
+    auto args = message->GetArgumentList();
+    double x = (args.get() && args->GetSize() > 0 && args->GetType(0) == VTYPE_DOUBLE) ? args->GetDouble(0) : 0.0;
+    double y = (args.get() && args->GetSize() > 1 && args->GetType(1) == VTYPE_DOUBLE) ? args->GetDouble(1) : 0.0;
+    double z = (args.get() && args->GetSize() > 2 && args->GetType(2) == VTYPE_DOUBLE) ? args->GetDouble(2) : 0.0;
+    std::cout << "[Renderer->Browser][RB_POSE] hmd.pos = (" << x << ", " << y << ", " << z << ")\n";
+    return true; // handled
+  }
   return false;
 }
 
  
+
+void OffscreenClient::OnLoadEnd(CefRefPtr<CefBrowser> browser,
+                                CefRefPtr<CefFrame> frame,
+                                int httpStatusCode) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!frame.get() || !frame->IsMain()) return;
+  // Use page-side injection to define a simple bridge when stage>=2 to avoid render-process fragility.
+  CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
+  int stage = 0;
+  if (cmd.get() && cmd->HasSwitch("v8-ext-stage")) {
+    stage = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
+  }
+  if (stage >= 2) {
+    const char* js = R"JS((function(){
+      try {
+        var g = (typeof window !== 'undefined') ? window : this;
+        if (!g.cefExt) g.cefExt = {};
+        if (typeof g.cefExt.ping !== 'function') g.cefExt.ping = function(x){ return (x||0)+1; };
+        try { console.log('[cef-ext] installed via OnLoadEnd'); } catch(e){}
+      } catch(e) {}
+    })();)JS";
+    frame->ExecuteJavaScript(js, "", 0);
+  }
+}
