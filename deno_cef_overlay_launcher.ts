@@ -13,7 +13,7 @@ type Args = {
   scale: number;
   url: string;
   exe: string;
-  vr: boolean;
+  vrMode: boolean;
   fps?: number;
   shaderPanorama?: boolean;
   stereoPanoramaFlag?: boolean;
@@ -26,24 +26,24 @@ type Args = {
   v8ExtStage?: number; // integer stage to enable minimal render handler
   enableIwerBridge?: boolean; // enable pose bridge
   iwerApplyPose?: number; // ms; browser-side applyPose timer
-  desktopTest?: boolean; // if true, launch host without OpenVR overlay
 };
 
 function parseArgs(): Args {
   const defaults: Args = {
     key: "cef.web.overlay",
-    width: 4096,
-    height: 4096,
-    scale: 3.0,
+    width: 1600,
+    height: 900,
+    scale: 1.0,
     url: "",
     exe: Deno.build.os === "windows" ? ".\\build\\bin\\chromedirect_demo.exe" : "./build/bin/chromedirect_demo",
-    vr: true,
+    vrMode: false,
   };
   const out: Args = { ...defaults };
   let widthExplicit = false;
   let heightExplicit = false;
   let fpsExplicit = false;
-  let vrExplicit = false;
+  let scaleExplicit = false;
+  let enableBridgeExplicit = false;
 
   for (const rawArg of Deno.args) {
     if (!rawArg.startsWith("--")) continue;
@@ -54,7 +54,7 @@ function parseArgs(): Args {
       case "key": out.key = v; break;
       case "width": out.width = Math.max(64, Number(v) || out.width); widthExplicit = true; break;
       case "height": out.height = Math.max(64, Number(v) || out.height); heightExplicit = true; break;
-      case "scale": out.scale = Math.max(0.01, Number(v) || out.scale); break;
+      case "scale": out.scale = Math.max(0.01, Number(v) || out.scale); scaleExplicit = true; break;
       case "url": out.url = v; break;
       case "exe": out.exe = v; break;
       case "fps": out.fps = Math.max(1, Number(v) || 120); fpsExplicit = true; break;
@@ -67,29 +67,29 @@ function parseArgs(): Args {
       case "v8-ping": out.v8Ping = Math.max(50, Number(v) || 1000); break;
       case "v8-post-vr": out.v8PostVr = Math.max(50, Number(v) || 1000); break;
       case "v8-ext-stage": out.v8ExtStage = Math.max(1, Number(v) || 1); break;
-      case "enable-iwer-bridge": out.enableIwerBridge = (v === "1" || v === "true" || v === ""); break;
+      case "enable-iwer-bridge": out.enableIwerBridge = (v === "1" || v === "true" || v === ""); enableBridgeExplicit = true; break;
       case "iwer-apply-pose": out.iwerApplyPose = Math.max(5, Number(v) || 11); break;
-      case "vr": {
-        vrExplicit = true;
+      case "vr-mode": {
         const val = v.toLowerCase();
-        out.vr = !(val === "0" || val === "false" || val === "no");
+        out.vrMode = v === "" ? true : !(val === "0" || val === "false" || val === "no");
         break;
       }
-      case "desktop-test": {
-        const enable = v === "" || v === "1" || v === "true";
-        out.desktopTest = enable;
-        if (enable) out.vr = false;
+      case "vr": {
+        const val = v.toLowerCase();
+        out.vrMode = v === "" ? true : !(val === "0" || val === "false" || val === "no");
         break;
       }
     }
   }
-  if (out.desktopTest) {
-    if (!widthExplicit) out.width = 1600;
-    if (!heightExplicit) out.height = 900;
+  if (out.vrMode) {
+    if (!widthExplicit) out.width = 4000;
+    if (!heightExplicit) out.height = 2000;
+    if (!fpsExplicit) out.fps = 120;
+    if (!scaleExplicit) out.scale = 3.0;
+  } else {
     if (!fpsExplicit) out.fps = 60;
-    out.vr = false;
-  } else if (!vrExplicit) {
-    out.vr = defaults.vr;
+    if (!scaleExplicit) out.scale = 1.0;
+    if (!enableBridgeExplicit) out.enableIwerBridge = false;
   }
   // Default URL to local index.html via file:// if none provided
   if (!out.url) {
@@ -191,7 +191,7 @@ function setOverlayTransformAnimated(
 async function spawnHost(exe: string, args: Args) {
   // C++ currently uses defaults; we still pass helpful flags for future-proofing
   const params = [
-    `--vr=${args.vr ? "true" : "false"}`,
+    `--vr-mode=${args.vrMode ? "true" : "false"}`,
     `--width=${args.width}`,
     `--height=${args.height}`,
     `--scale=${args.scale}`,
@@ -209,7 +209,6 @@ async function spawnHost(exe: string, args: Args) {
     ...(args.stereoPanoramaFlag ? ["--overlay-stereo-panorama=true"] : []),
     ...(args.fovDeg ? [`--fov-deg=${args.fovDeg}`] : []),
     ...(args.shaderDebug ? [`--shader-debug=${args.shaderDebug}`] : []),
-    ...(args.desktopTest ? ["--desktop-test"] : []),
     `--log-console`,
   ];
   const cmd = new Deno.Command(exe, { args: params, stdout: "piped", stderr: "piped" });
@@ -236,7 +235,7 @@ async function spawnHost(exe: string, args: Args) {
 
 if (import.meta.main) {
   const args = parseArgs();
-  if (args.vr) {
+  if (args.vrMode) {
     console.log("[Deno] VR overlay mode:", args);
     console.log(await OpenVR.initializeOpenVR());
     const { overlay, overlayHandle } = initOverlay(args.key, args.scale);
@@ -269,7 +268,7 @@ if (import.meta.main) {
       try { child.kill("SIGKILL"); } catch { /* ignore */ }
     }
   } else {
-    console.log("[Deno] Desktop test mode (no OpenVR overlay):", args);
+    console.log("[Deno] Desktop mode (no OpenVR overlay):", args);
     const child = await spawnHost(args.exe, args);
     addEventListener("SIGINT", () => { try { child.kill("SIGTERM"); } catch { /* ignore */ } });
     const status = await child.status;

@@ -12,11 +12,25 @@
 #include <iostream>
 #include <algorithm>
 #include <cstring>
+#include <cmath>
 #include <openvr.h>
 
-OffscreenClient::OffscreenClient(HWND host_window, std::shared_ptr<Presenter> presenter, int width, int height, float scale, int frame_rate)
-    : host_window_(host_window), presenter_(std::move(presenter)), width_(width), height_(height), scale_(scale), frame_rate_(frame_rate) {
-  std::cout << "[Client] OffscreenClient created (" << width << "x" << height << ", scale=" << scale << ")\n";
+OffscreenClient::OffscreenClient(HWND host_window,
+                                 std::shared_ptr<Presenter> presenter,
+                                 int width,
+                                 int height,
+                                 float scale,
+                                 int frame_rate,
+                                 bool vr_mode)
+    : host_window_(host_window),
+      presenter_(std::move(presenter)),
+      width_(width),
+      height_(height),
+      scale_(scale),
+      frame_rate_(frame_rate),
+      vr_mode_(vr_mode) {
+  std::cout << "[Client] OffscreenClient created (" << width << "x" << height
+            << ", scale=" << scale << ", vr_mode=" << (vr_mode_ ? "1" : "0") << ")\n";
 }
 
 void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
@@ -123,17 +137,19 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   }
 
   // Real OpenVR pose -> page via iwerBridge.applyPose (browser-side injection)
-  // Enabled with --iwer-apply-pose[=ms] or with --enable-iwer-bridge (defaults to 11ms)
+  // Enabled with --iwer-apply-pose[=ms] (defaults to 11ms when vr_mode_)
   int pose_ms = 0;
   if (cmd.get()) {
     if (cmd->HasSwitch("iwer-apply-pose")) {
       pose_ms = std::max(5, atoi(cmd->GetSwitchValue("iwer-apply-pose").ToString().c_str()));
       if (pose_ms <= 0) pose_ms = 11;
-    } else if (cmd->HasSwitch("enable-iwer-bridge")) {
-      pose_ms = 11; // ~90Hz
     }
   }
-  if (pose_ms > 0) {
+  if (pose_ms > 0 && !vr_mode_) {
+    std::cout << "[Client] Ignoring --iwer-apply-pose in desktop mode (no OpenVR data available)\n";
+    pose_ms = 0;
+  }
+  if (pose_ms > 0 && vr_mode_) {
     class VrPoseTask : public CefTask {
      public:
       VrPoseTask(CefRefPtr<OffscreenClient> c, int ms) : client_(c), ms_(ms) {}
@@ -215,11 +231,19 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     };
     CefPostDelayedTask(TID_UI, new VrPoseTask(this, pose_ms), pose_ms);
   }
-  // If iwer bridge is enabled, send a periodic VR_STATE message to renderer (demo pose).
-  if (cmd.get() && cmd->HasSwitch("enable-iwer-bridge")) {
+  // If iwer bridge is enabled, or we are running desktop mode, send a periodic VR_STATE message.
+  const bool bridge_switch = cmd.get() && cmd->HasSwitch("enable-iwer-bridge");
+  const bool auto_bridge = !vr_mode_;
+  if (bridge_switch || auto_bridge) {
+    if (auto_bridge && !bridge_switch) {
+      std::cout << "[Client] Auto-enabling IWER bridge animation (desktop mode)\n";
+    } else {
+      std::cout << "[Client] IWER bridge animation enabled via flag\n";
+    }
     class VrStateMsgTask : public CefTask {
      public:
-      explicit VrStateMsgTask(CefRefPtr<OffscreenClient> c) : client_(c) {}
+      VrStateMsgTask(CefRefPtr<OffscreenClient> c, bool desktop_mode)
+          : client_(c), desktop_mode_(desktop_mode) {}
       void Execute() override {
         CEF_REQUIRE_UI_THREAD();
         if (!client_.get()) return;
@@ -228,32 +252,46 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
         auto frame = br->GetMainFrame();
         if (!frame.get()) return;
         static int tick = 0; tick++;
-        const double t = tick * (1.0/90.0);
+        const double t = tick * (desktop_mode_ ? (1.0/60.0) : (1.0/90.0));
         // Build 21 floats: hmd pos(3)+quat(4), left pos+quat, right pos+quat
         float data[21] = {0};
-        // Simple animated HMD around (0,1.6, -1.5)
-        data[0] = 0.25f * (float)sin(t); // x
-        data[1] = 1.6f;                  // y
-        data[2] = -1.5f + 0.25f * (float)cos(t); // z
-        data[3] = 0; data[4] = 0; data[5] = 0; data[6] = 1; // quat
+        // Simple animated HMD orbit with gentle bobbing
+        const float radius = desktop_mode_ ? 0.45f : 0.25f;
+        const float base_y = desktop_mode_ ? 1.75f : 1.6f;
+        const float bob = desktop_mode_ ? 0.1f : 0.05f;
+        data[0] = radius * static_cast<float>(std::sin(t));
+        data[1] = base_y + bob * static_cast<float>(std::sin(t * 0.5));
+        data[2] = -1.5f + radius * static_cast<float>(std::cos(t));
+        const float yaw = 0.35f * static_cast<float>(std::sin(t * 0.75));
+        const float halfYaw = yaw * 0.5f;
+        data[3] = 0.0f;
+        data[4] = std::sin(halfYaw);
+        data[5] = 0.0f;
+        data[6] = std::cos(halfYaw);
         // Left controller near (-0.3,1.4,-1.3)
-        data[7] = -0.3f; data[8] = 1.4f; data[9] = -1.3f;
+        data[7] = -0.35f + 0.05f * static_cast<float>(std::sin(t * 1.2));
+        data[8] = 1.45f + 0.05f * static_cast<float>(std::cos(t * 0.8));
+        data[9] = -1.3f + 0.05f * static_cast<float>(std::cos(t * 1.4));
         data[10]= 0; data[11]= 0; data[12]= 0; data[13]= 1;
         // Right controller near (0.3,1.4,-1.3)
-        data[14]= 0.3f; data[15]= 1.4f; data[16]= -1.3f;
+        data[14]= 0.35f + 0.05f * static_cast<float>(std::sin(t * 1.15 + 1.0));
+        data[15]= 1.45f + 0.05f * static_cast<float>(std::cos(t * 0.9 + 0.5));
+        data[16]= -1.3f + 0.05f * static_cast<float>(std::cos(t * 1.3 + 0.3));
         data[17]= 0; data[18]= 0; data[19]= 0; data[20]= 1;
         CefRefPtr<CefBinaryValue> bin = CefBinaryValue::Create(data, sizeof(data));
         CefRefPtr<CefProcessMessage> pm = CefProcessMessage::Create("VR_STATE");
         pm->GetArgumentList()->SetBinary(0, bin);
         frame->SendProcessMessage(PID_RENDERER, pm);
         // Reschedule ~90Hz
-        CefPostDelayedTask(TID_UI, this, 11);
+        const int interval_ms = desktop_mode_ ? 16 : 11;
+        CefPostDelayedTask(TID_UI, this, interval_ms);
       }
      private:
       CefRefPtr<OffscreenClient> client_;
+      bool desktop_mode_ = false;
       IMPLEMENT_REFCOUNTING(VrStateMsgTask);
     };
-    CefPostTask(TID_UI, new VrStateMsgTask(this));
+    CefPostTask(TID_UI, new VrStateMsgTask(this, auto_bridge));
   }
 }
 

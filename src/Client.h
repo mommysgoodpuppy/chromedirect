@@ -19,7 +19,13 @@ class OffscreenClient final : public CefClient,
                               public CefRequestHandler,
                               public CefLoadHandler {
 public:
-  OffscreenClient(HWND host_window, std::shared_ptr<Presenter> presenter, int width, int height, float scale = 1.0f, int frame_rate = 60);
+  OffscreenClient(HWND host_window,
+                  std::shared_ptr<Presenter> presenter,
+                  int width,
+                  int height,
+                  float scale = 1.0f,
+                  int frame_rate = 60,
+                  bool vr_mode = false);
 
   // CefClient
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
@@ -82,6 +88,7 @@ private:
   int height_ = 600;
   float scale_ = 1.0f;
   int frame_rate_ = 60;
+  bool vr_mode_ = false;
   std::atomic<bool> got_accel_{false};
 
   // Minimal V8 ping (debug) to validate page script execution without renderer handler

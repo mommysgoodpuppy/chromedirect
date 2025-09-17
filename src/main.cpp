@@ -22,6 +22,7 @@
 #include <fcntl.h>
 #include <algorithm>
 #include <cstdlib>
+#include <cctype>
 
 // Configuration (runtime via flags)
 static bool g_enable_vr_mode = true; // --vr=false to use regular D3D presenter
@@ -325,49 +326,68 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
   // Window / headless setup and runtime options
-  int width = 4000;   // overlay/output width
-  int height = 2000;  // overlay/output height
+  int width = 1600;   // desktop/default output width
+  int height = 900;   // desktop/default output height
   int cef_width = -1;  // browser/input width (defaults to overlay width)
   int cef_height = -1; // browser/input height (can default to half for panorama)
   float scale_m = 1.0f;
   std::string overlay_key = "cef.web.overlay";
   std::string start_url = "https://www.google.com";
-  int target_fps = 120; // default higher than 60 to unlock
-  bool stereo_panorama_flag = true; // default to stereo panorama
+  int target_fps = 60;
+  bool stereo_panorama_flag = false;
   bool shader_panorama = false;
   float fov_deg = 90.0f; // total FOV; half used in shader
   bool warp_follow_head = false;
-  bool desktop_test_mode = false;
 
-  if (app_cmd->HasSwitch("vr")) {
-    const std::string v = app_cmd->GetSwitchValue("vr");
-    if (!v.empty()) {
-      g_enable_vr_mode = !(v == "0" || v == "false" || v == "no");
-    }
+  auto parse_bool_switch = [](const std::string& v, bool empty_default_true) {
+    if (v.empty()) return empty_default_true;
+    std::string lower = v;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+      return static_cast<char>(std::tolower(c));
+    });
+    return !(lower == "0" || lower == "false" || lower == "no");
+  };
+
+  if (app_cmd->HasSwitch("vr-mode")) {
+    const std::string v = app_cmd->GetSwitchValue("vr-mode").ToString();
+    g_enable_vr_mode = parse_bool_switch(v, true);
+  } else if (app_cmd->HasSwitch("vr")) {
+    const std::string v = app_cmd->GetSwitchValue("vr").ToString();
+    g_enable_vr_mode = parse_bool_switch(v, true);
   }
-  if (app_cmd->HasSwitch("desktop-test")) {
-    desktop_test_mode = true;
-    g_enable_vr_mode = false;
-    width = 1600;
-    height = 900;
-    target_fps = 60;
-    stereo_panorama_flag = false;
-    shader_panorama = false;
-    std::cout << "[CEF Demo] Desktop test mode enabled (forcing D3D presenter)\n";
+
+  if (g_enable_vr_mode) {
+    width = 4000;
+    height = 2000;
+    target_fps = 120;
+    scale_m = 3.0f;
+    stereo_panorama_flag = true;
+    std::cout << "[CEF Demo] VR mode enabled (OpenVR presenter)" << std::endl;
+  } else {
+    std::cout << "[CEF Demo] VR mode disabled (desktop D3D presenter)" << std::endl;
   }
-  if (app_cmd->HasSwitch("width")) {
+
+  const bool width_explicit = app_cmd->HasSwitch("width");
+  const bool height_explicit = app_cmd->HasSwitch("height");
+  const bool cef_width_explicit = app_cmd->HasSwitch("cef-width");
+  const bool cef_height_explicit = app_cmd->HasSwitch("cef-height");
+  const bool scale_explicit = app_cmd->HasSwitch("scale");
+  const bool fps_explicit = app_cmd->HasSwitch("fps");
+  const bool stereo_explicit = app_cmd->HasSwitch("overlay-stereo-panorama");
+
+  if (width_explicit) {
     width = std::max(64, atoi(app_cmd->GetSwitchValue("width").ToString().c_str()));
   }
-  if (app_cmd->HasSwitch("height")) {
+  if (height_explicit) {
     height = std::max(64, atoi(app_cmd->GetSwitchValue("height").ToString().c_str()));
   }
-  if (app_cmd->HasSwitch("cef-width")) {
+  if (cef_width_explicit) {
     cef_width = std::max(64, atoi(app_cmd->GetSwitchValue("cef-width").ToString().c_str()));
   }
-  if (app_cmd->HasSwitch("cef-height")) {
+  if (cef_height_explicit) {
     cef_height = std::max(64, atoi(app_cmd->GetSwitchValue("cef-height").ToString().c_str()));
   }
-  if (app_cmd->HasSwitch("scale")) {
+  if (scale_explicit) {
     scale_m = std::max(0.01f, static_cast<float>(atof(app_cmd->GetSwitchValue("scale").ToString().c_str())));
   }
   if (app_cmd->HasSwitch("overlay-key")) {
@@ -376,14 +396,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   if (app_cmd->HasSwitch("url")) {
     start_url = app_cmd->GetSwitchValue("url").ToString();
   }
-  if (app_cmd->HasSwitch("fps")) {
+  if (fps_explicit) {
     target_fps = std::max(1, atoi(app_cmd->GetSwitchValue("fps").ToString().c_str()));
   }
-  if (desktop_test_mode) {
-    std::cout << "[CEF Demo] Desktop test defaults -> "
-              << width << "x" << height << " @ " << target_fps << " FPS" << std::endl;
+  if (!fps_explicit && g_enable_vr_mode) {
+    target_fps = 120;
   }
-  if (app_cmd->HasSwitch("overlay-stereo-panorama")) {
+  if (!scale_explicit && g_enable_vr_mode) {
+    scale_m = 3.0f;
+  }
+  if (stereo_explicit) {
     const std::string v = app_cmd->GetSwitchValue("overlay-stereo-panorama");
     stereo_panorama_flag = (v.empty() || v == "1" || v == "true");
   }
@@ -397,6 +419,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   if (app_cmd->HasSwitch("warp-follow-head")) {
     const std::string v = app_cmd->GetSwitchValue("warp-follow-head");
     warp_follow_head = (v.empty() || v == "1" || v == "true");
+  }
+
+  if (!g_enable_vr_mode) {
+    std::cout << "[CEF Demo] Desktop presenter target -> "
+              << width << "x" << height << " @ " << target_fps << " FPS" << std::endl;
   }
   HWND hWnd = nullptr;
   if (!g_enable_vr_mode) {
@@ -538,7 +565,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
   std::cout << "[CEF Demo] Creating browser client...\n";
   std::cout << "[CEF Demo] Browser/input size: " << cef_width << "x" << cef_height << ", overlay/output: " << width << "x" << height << "\n";
-  g_client = new OffscreenClient(g_enable_vr_mode ? nullptr : hWnd, presenter, cef_width, cef_height, 1.0f, target_fps);
+  g_client = new OffscreenClient(g_enable_vr_mode ? nullptr : hWnd, presenter, cef_width, cef_height, 1.0f, target_fps, g_enable_vr_mode);
   CefRefPtr<CefClient> base_client = g_client;
 
   std::cout << "[CEF Demo] Creating browser with URL: " << start_url << "\n";
