@@ -43,7 +43,6 @@ function parseArgs(): Args {
   let heightExplicit = false;
   let fpsExplicit = false;
   let scaleExplicit = false;
-  let enableBridgeExplicit = false;
 
   for (const rawArg of Deno.args) {
     if (!rawArg.startsWith("--")) continue;
@@ -67,7 +66,7 @@ function parseArgs(): Args {
       case "v8-ping": out.v8Ping = Math.max(50, Number(v) || 1000); break;
       case "v8-post-vr": out.v8PostVr = Math.max(50, Number(v) || 1000); break;
       case "v8-ext-stage": out.v8ExtStage = Math.max(1, Number(v) || 1); break;
-      case "enable-iwer-bridge": out.enableIwerBridge = (v === "1" || v === "true" || v === ""); enableBridgeExplicit = true; break;
+      case "enable-iwer-bridge": out.enableIwerBridge = (v === "1" || v === "true" || v === ""); break;
       case "iwer-apply-pose": out.iwerApplyPose = Math.max(5, Number(v) || 11); break;
       case "vr-mode": {
         const val = v.toLowerCase();
@@ -89,7 +88,6 @@ function parseArgs(): Args {
   } else {
     if (!fpsExplicit) out.fps = 60;
     if (!scaleExplicit) out.scale = 1.0;
-    if (!enableBridgeExplicit) out.enableIwerBridge = false;
   }
   // Default URL to local index.html via file:// if none provided
   if (!out.url) {

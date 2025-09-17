@@ -231,15 +231,14 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     };
     CefPostDelayedTask(TID_UI, new VrPoseTask(this, pose_ms), pose_ms);
   }
-  // If iwer bridge is enabled, or we are running desktop mode, send a periodic VR_STATE message.
-  const bool bridge_switch = cmd.get() && cmd->HasSwitch("enable-iwer-bridge");
-  const bool auto_bridge = !vr_mode_;
-  if (bridge_switch || auto_bridge) {
-    if (auto_bridge && !bridge_switch) {
-      std::cout << "[Client] Auto-enabling IWER bridge animation (desktop mode)\n";
-    } else {
-      std::cout << "[Client] IWER bridge animation enabled via flag\n";
-    }
+  // If explicitly requested (and only in VR mode), send VR_STATE messages to the renderer.
+  const bool bridge_flag = cmd.get() && cmd->HasSwitch("enable-iwer-bridge");
+  if (bridge_flag && !vr_mode_) {
+    std::cout << "[Client] Ignoring --enable-iwer-bridge because VR mode is disabled\n";
+  }
+  const bool bridge_switch = bridge_flag && vr_mode_;
+  if (bridge_switch) {
+    std::cout << "[Client] IWER bridge animation enabled via flag\n";
     class VrStateMsgTask : public CefTask {
      public:
       VrStateMsgTask(CefRefPtr<OffscreenClient> c, bool desktop_mode)
@@ -291,7 +290,56 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
       bool desktop_mode_ = false;
       IMPLEMENT_REFCOUNTING(VrStateMsgTask);
     };
-    CefPostTask(TID_UI, new VrStateMsgTask(this, auto_bridge));
+    CefPostTask(TID_UI, new VrStateMsgTask(this, false));
+  }
+
+  // Desktop-mode synthetic pose: drive iwerBridge.applyPose via ExecuteJavaScript without renderer bridge.
+  if (!vr_mode_) {
+    std::cout << "[Client] Starting desktop dummy pose animation" << std::endl;
+    class DesktopPoseTask : public CefTask {
+     public:
+      DesktopPoseTask(CefRefPtr<OffscreenClient> c, int interval_ms)
+          : client_(c), interval_ms_(interval_ms), tick_(0) {}
+      void Execute() override {
+        CEF_REQUIRE_UI_THREAD();
+        if (!client_.get()) return;
+        auto br = client_->GetBrowser();
+        if (!br.get()) return;
+        if (!br->HasDocument()) {
+          CefPostDelayedTask(TID_UI, this, interval_ms_);
+          return;
+        }
+        auto frame = br->GetMainFrame();
+        if (!frame.get()) {
+          CefPostDelayedTask(TID_UI, this, interval_ms_);
+          return;
+        }
+        ++tick_;
+        const double t = tick_ * (interval_ms_ / 1000.0);
+        const double radius = 0.40;
+        const double x = radius * std::sin(t);
+        const double y = 1.72 + 0.08 * std::sin(t * 0.45);
+        const double z = -1.45 + radius * std::cos(t);
+        const double yaw = 0.35 * std::sin(t * 0.7);
+        const double half_yaw = yaw * 0.5;
+        const double quat_x = 0.0;
+        const double quat_y = std::sin(half_yaw);
+        const double quat_z = 0.0;
+        const double quat_w = std::cos(half_yaw);
+        char js[512];
+        snprintf(js, sizeof(js),
+          "(function(){try{ if(window.iwerBridge&&typeof iwerBridge.applyPose==='function'){ iwerBridge.applyPose({hmd:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}}); } }catch(e){} })();",
+          x, y, z, quat_x, quat_y, quat_z, quat_w);
+        frame->ExecuteJavaScript(js, "", 0);
+        CefPostDelayedTask(TID_UI, this, interval_ms_);
+      }
+     private:
+      CefRefPtr<OffscreenClient> client_;
+      int interval_ms_ = 16;
+      int tick_;
+      IMPLEMENT_REFCOUNTING(DesktopPoseTask);
+    };
+    CefPostDelayedTask(TID_UI, new DesktopPoseTask(this, 16), 200);
   }
 }
 

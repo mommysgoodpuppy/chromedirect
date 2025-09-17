@@ -25,7 +25,7 @@
 #include <cctype>
 
 // Configuration (runtime via flags)
-static bool g_enable_vr_mode = true; // --vr=false to use regular D3D presenter
+static bool g_enable_vr_mode = false; // --vr-mode=true to enable OpenVR presenter
 
 // Global variables for cleanup
 static std::atomic<bool> g_shutdown_requested{false};
@@ -238,31 +238,33 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       }
       // Stage 4+: Provide a minimal pose bridge API for IWER.
       if (stage_ >= 4) {
-        const char* kPoseJS =
-          "if (!iwerBridge) var iwerBridge = {};\n"
-          "if (!iwerBridge.applyPose) iwerBridge.applyPose = function(s){\n"
-          "  try {\n"
-          "    var g = (typeof window !== 'undefined') ? window : this;\n"
-          "    var d = g && g.xrDevice ? g.xrDevice : null;\n"
-          "    if (!d) return false;\n"
-          "    if (s && s.hmd) {\n"
-          "      if (s.hmd.pos && d.position && d.position.set) d.position.set(s.hmd.pos[0], s.hmd.pos[1], s.hmd.pos[2]);\n"
-          "      if (s.hmd.quat && d.quaternion && d.quaternion.set) d.quaternion.set(s.hmd.quat[0], s.hmd.quat[1], s.hmd.quat[2], s.hmd.quat[3]);\n"
-          "    }\n"
-          "    if (d.controllers) {\n"
-          "      var L=d.controllers['left'], R=d.controllers['right'];\n"
-          "      if (L && s && s.left) {\n"
-          "        if (s.left.pos && L.position && L.position.set) L.position.set(s.left.pos[0], s.left.pos[1], s.left.pos[2]);\n"
-          "        if (s.left.quat && L.quaternion && L.quaternion.set) L.quaternion.set(s.left.quat[0], s.left.quat[1], s.left.quat[2], s.left.quat[3]);\n"
-          "      }\n"
-          "      if (R && s && s.right) {\n"
-          "        if (s.right.pos && R.position && R.position.set) R.position.set(s.right.pos[0], s.right.pos[1], s.right.pos[2]);\n"
-          "        if (s.right.quat && R.quaternion && R.quaternion.set) R.quaternion.set(s.right.quat[0], s.right.quat[1], s.right.quat[2], s.right.quat[3]);\n"
-          "      }\n"
-          "    }\n"
-          "    return true;\n"
-          "  } catch(e){ return false; }\n"
-          "};\n";
+        const char *kPoseJS =
+            "if (!iwerBridge) var iwerBridge = {};\n"
+            "  console.log('test')\n"
+            "if (!iwerBridge.applyPose) iwerBridge.applyPose = function(s){\n"
+            "  try {\n"
+            "  console.log('test2')\n"
+            "    var g = (typeof window !== 'undefined') ? window : this;\n"
+            "    var d = g && g.xrDevice ? g.xrDevice : null;\n"
+            "    if (!d) return false;\n"
+            "    if (s && s.hmd) {\n"
+            "      if (s.hmd.pos && d.position && d.position.set) d.position.set(s.hmd.pos[0], s.hmd.pos[1], s.hmd.pos[2]);\n"
+            "      if (s.hmd.quat && d.quaternion && d.quaternion.set) d.quaternion.set(s.hmd.quat[0], s.hmd.quat[1], s.hmd.quat[2], s.hmd.quat[3]);\n"
+            "    }\n"
+            "    if (d.controllers) {\n"
+            "      var L=d.controllers['left'], R=d.controllers['right'];\n"
+            "      if (L && s && s.left) {\n"
+            "        if (s.left.pos && L.position && L.position.set) L.position.set(s.left.pos[0], s.left.pos[1], s.left.pos[2]);\n"
+            "        if (s.left.quat && L.quaternion && L.quaternion.set) L.quaternion.set(s.left.quat[0], s.left.quat[1], s.left.quat[2], s.left.quat[3]);\n"
+            "      }\n"
+            "      if (R && s && s.right) {\n"
+            "        if (s.right.pos && R.position && R.position.set) R.position.set(s.right.pos[0], s.right.pos[1], s.right.pos[2]);\n"
+            "        if (s.right.quat && R.quaternion && R.quaternion.set) R.quaternion.set(s.right.quat[0], s.right.quat[1], s.right.quat[2], s.right.quat[3]);\n"
+            "      }\n"
+            "    }\n"
+            "    return true;\n"
+            "  } catch(e){ return false; }\n"
+            "};\n";
         CefRegisterExtension("v8/iwer_pose", kPoseJS, nullptr);
       }
     }
