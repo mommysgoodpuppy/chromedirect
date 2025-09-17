@@ -219,7 +219,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
   class MinimalRenderHandler : public CefRenderProcessHandler {
    public:
-    MinimalRenderHandler() : stage_(0), ext_registered_(false) {}
+    MinimalRenderHandler() : stage_(0), ext_registered_(false), stage5_registered_(false) {}
     void OnWebKitInitialized() override {
       // Stage 2+: Register a trivial JS-only extension that defines window.cefExt.ping
       CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
@@ -238,34 +238,84 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       }
       // Stage 4+: Provide a minimal pose bridge API for IWER.
       if (stage_ >= 4) {
-        const char *kPoseJS =
-            "if (!iwerBridge) var iwerBridge = {};\n"
-            "  console.log('test')\n"
-            "if (!iwerBridge.applyPose) iwerBridge.applyPose = function(s){\n"
-            "  try {\n"
-            "  console.log('test2')\n"
-            "    var g = (typeof window !== 'undefined') ? window : this;\n"
-            "    var d = g && g.xrDevice ? g.xrDevice : null;\n"
-            "    if (!d) return false;\n"
-            "    if (s && s.hmd) {\n"
-            "      if (s.hmd.pos && d.position && d.position.set) d.position.set(s.hmd.pos[0], s.hmd.pos[1], s.hmd.pos[2]);\n"
-            "      if (s.hmd.quat && d.quaternion && d.quaternion.set) d.quaternion.set(s.hmd.quat[0], s.hmd.quat[1], s.hmd.quat[2], s.hmd.quat[3]);\n"
-            "    }\n"
-            "    if (d.controllers) {\n"
-            "      var L=d.controllers['left'], R=d.controllers['right'];\n"
-            "      if (L && s && s.left) {\n"
-            "        if (s.left.pos && L.position && L.position.set) L.position.set(s.left.pos[0], s.left.pos[1], s.left.pos[2]);\n"
-            "        if (s.left.quat && L.quaternion && L.quaternion.set) L.quaternion.set(s.left.quat[0], s.left.quat[1], s.left.quat[2], s.left.quat[3]);\n"
-            "      }\n"
-            "      if (R && s && s.right) {\n"
-            "        if (s.right.pos && R.position && R.position.set) R.position.set(s.right.pos[0], s.right.pos[1], s.right.pos[2]);\n"
-            "        if (s.right.quat && R.quaternion && R.quaternion.set) R.quaternion.set(s.right.quat[0], s.right.quat[1], s.right.quat[2], s.right.quat[3]);\n"
-            "      }\n"
-            "    }\n"
-            "    return true;\n"
-            "  } catch(e){ return false; }\n"
-            "};\n";
+        const char* kPoseJS =
+          "if (!iwerBridge) var iwerBridge = {};\n"
+          "if (!iwerBridge.__logOnce) { iwerBridge.__logOnce = true; try { console.log('[iwerPose] extension installed'); } catch(e){} }\n"
+          "if (!iwerBridge.applyPose) iwerBridge.applyPose = function(s){\n"
+          "  try {\n"
+          "    var g = (typeof window !== 'undefined') ? window : this;\n"
+          "    var dev = null;\n"
+          "    if (g) {\n"
+          "      if (g.__iwerDevice) dev = g.__iwerDevice;\n"
+          "      else if (g.xrDevice) dev = g.xrDevice;\n"
+          "    }\n"
+          "    if (!dev) { try { console.warn('[iwerPose] xrDevice missing'); } catch(e){} return false; }\n"
+          "    if (s && s.hmd) {\n"
+          "      if (s.hmd.pos && dev.position && dev.position.set) dev.position.set(s.hmd.pos[0], s.hmd.pos[1], s.hmd.pos[2]);\n"
+          "      if (s.hmd.quat && dev.quaternion && dev.quaternion.set) dev.quaternion.set(s.hmd.quat[0], s.hmd.quat[1], s.hmd.quat[2], s.hmd.quat[3]);\n"
+          "    }\n"
+          "    if (dev.controllers) {\n"
+          "      var L = dev.controllers['left'];\n"
+          "      var R = dev.controllers['right'];\n"
+          "      if (L && s && s.left) {\n"
+          "        if (s.left.pos && L.position && L.position.set) L.position.set(s.left.pos[0], s.left.pos[1], s.left.pos[2]);\n"
+          "        if (s.left.quat && L.quaternion && L.quaternion.set) L.quaternion.set(s.left.quat[0], s.left.quat[1], s.left.quat[2], s.left.quat[3]);\n"
+          "      }\n"
+          "      if (R && s && s.right) {\n"
+          "        if (s.right.pos && R.position && R.position.set) R.position.set(s.right.pos[0], s.right.pos[1], s.right.pos[2]);\n"
+          "        if (s.right.quat && R.quaternion && R.quaternion.set) R.quaternion.set(s.right.quat[0], s.right.quat[1], s.right.quat[2], s.right.quat[3]);\n"
+          "      }\n"
+          "    }\n"
+          "    if (typeof g !== 'undefined') {\n"
+          "      g.__iwerPoseCount = (g.__iwerPoseCount || 0) + 1;\n"
+          "      if (g.__iwerPoseCount === 1 || (g.__iwerPoseCount % 60) === 0) { try { console.log('[iwerPose] applyPose count=', g.__iwerPoseCount, 'pos=', s && s.hmd && s.hmd.pos); } catch(e){} }\n"
+          "    }\n"
+          "    return true;\n"
+          "  } catch(e) { try { console.error('[iwerPose] applyPose error', e); } catch(_e){} return false; }\n"
+          "};\n";
         CefRegisterExtension("v8/iwer_pose", kPoseJS, nullptr);
+      }
+
+      if (stage_ >= 5 && !stage5_registered_) {
+        class Stage5Handler : public CefV8Handler {
+         public:
+          Stage5Handler() = default;
+          bool Execute(const CefString& name,
+                       CefRefPtr<CefV8Value> /*object*/,
+                       const CefV8ValueList& arguments,
+                       CefRefPtr<CefV8Value>& retval,
+                       CefString& exception) override {
+            if (name == "__stage5Echo") {
+              if (!arguments.empty() && arguments[0]->IsString()) {
+                retval = CefV8Value::CreateString(arguments[0]->GetStringValue());
+              } else {
+                retval = CefV8Value::CreateString("");
+              }
+              return true;
+            }
+            if (name == "__stage5Add") {
+              double a = (arguments.size() > 0 && arguments[0]->IsDouble()) ? arguments[0]->GetDoubleValue() : 0.0;
+              double b = (arguments.size() > 1 && arguments[1]->IsDouble()) ? arguments[1]->GetDoubleValue() : 0.0;
+              retval = CefV8Value::CreateDouble(a + b);
+              return true;
+            }
+            exception = "unknown stage5 native call";
+            return false;
+          }
+
+         private:
+          IMPLEMENT_REFCOUNTING(Stage5Handler);
+        };
+
+        const char* kStage5JS =
+          "if (!cefExt) var cefExt = {};\n"
+          "if (!cefExt.stage5) cefExt.stage5 = {};\n"
+          "native function __stage5Echo();\n"
+          "native function __stage5Add();\n"
+          "cefExt.stage5.echo = function(msg){ return __stage5Echo(msg); };\n"
+          "cefExt.stage5.add = function(a,b){ return __stage5Add(a,b); };\n";
+        CefRegisterExtension("v8/cef_stage5", kStage5JS, new Stage5Handler());
+        stage5_registered_ = true;
       }
     }
     void OnContextCreated(CefRefPtr<CefBrowser> browser,
@@ -300,6 +350,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
    private:
     int stage_;
     bool ext_registered_;
+    bool stage5_registered_;
   };
   // Initialize the minimal handler instance so SimpleApp can return it when staged.
   if (!g_minimal_handler.get()) g_minimal_handler = new MinimalRenderHandler();

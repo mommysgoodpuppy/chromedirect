@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+#include <cstdio>
 #include <openvr.h>
 
 OffscreenClient::OffscreenClient(HWND host_window,
@@ -143,6 +144,8 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     if (cmd->HasSwitch("iwer-apply-pose")) {
       pose_ms = std::max(5, atoi(cmd->GetSwitchValue("iwer-apply-pose").ToString().c_str()));
       if (pose_ms <= 0) pose_ms = 11;
+    } else if (vr_mode_ && cmd->HasSwitch("enable-iwer-bridge")) {
+      pose_ms = 11;
     }
   }
   if (pose_ms > 0 && !vr_mode_) {
@@ -214,14 +217,17 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
             ToPosQuat(poses[i].mDeviceToAbsoluteTracking, rPos, rQuat);
           }
         }
-        // Build JS call (avoid JSON.stringify to keep it minimal here)
-        char js[1024];
-        snprintf(js, sizeof(js),
-          "(function(){try{ if(window.iwerBridge&&typeof iwerBridge.applyPose==='function'){ iwerBridge.applyPose({hmd:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}, left:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}, right:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}}); } }catch(e){} })();",
-          hPos[0],hPos[1],hPos[2], hQuat[0],hQuat[1],hQuat[2],hQuat[3],
-          lPos[0],lPos[1],lPos[2], lQuat[0],lQuat[1],lQuat[2],lQuat[3],
-          rPos[0],rPos[1],rPos[2], rQuat[0],rQuat[1],rQuat[2],rQuat[3]);
-        frame->ExecuteJavaScript(js, "", 0);
+        const bool sent = client_->SendPoseToRenderer(frame, hPos, hQuat, lPos, lQuat, rPos, rQuat);
+        if (!sent) {
+          // Fallback to direct JS injection when the native bridge is disabled.
+          char js[1024];
+          snprintf(js, sizeof(js),
+            "(function(){try{ if(window.iwerBridge&&typeof iwerBridge.applyPose==='function'){ iwerBridge.applyPose({hmd:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}, left:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}, right:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}}); } }catch(e){} })();",
+            hPos[0],hPos[1],hPos[2], hQuat[0],hQuat[1],hQuat[2],hQuat[3],
+            lPos[0],lPos[1],lPos[2], lQuat[0],lQuat[1],lQuat[2],lQuat[3],
+            rPos[0],rPos[1],rPos[2], rQuat[0],rQuat[1],rQuat[2],rQuat[3]);
+          frame->ExecuteJavaScript(js, "", 0);
+        }
         CefPostDelayedTask(TID_UI, this, ms_);
       }
      private:
@@ -231,66 +237,9 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     };
     CefPostDelayedTask(TID_UI, new VrPoseTask(this, pose_ms), pose_ms);
   }
-  // If explicitly requested (and only in VR mode), send VR_STATE messages to the renderer.
   const bool bridge_flag = cmd.get() && cmd->HasSwitch("enable-iwer-bridge");
-  if (bridge_flag && !vr_mode_) {
-    std::cout << "[Client] Ignoring --enable-iwer-bridge because VR mode is disabled\n";
-  }
-  const bool bridge_switch = bridge_flag && vr_mode_;
-  if (bridge_switch) {
-    std::cout << "[Client] IWER bridge animation enabled via flag\n";
-    class VrStateMsgTask : public CefTask {
-     public:
-      VrStateMsgTask(CefRefPtr<OffscreenClient> c, bool desktop_mode)
-          : client_(c), desktop_mode_(desktop_mode) {}
-      void Execute() override {
-        CEF_REQUIRE_UI_THREAD();
-        if (!client_.get()) return;
-        auto br = client_->GetBrowser();
-        if (!br.get()) return;
-        auto frame = br->GetMainFrame();
-        if (!frame.get()) return;
-        static int tick = 0; tick++;
-        const double t = tick * (desktop_mode_ ? (1.0/60.0) : (1.0/90.0));
-        // Build 21 floats: hmd pos(3)+quat(4), left pos+quat, right pos+quat
-        float data[21] = {0};
-        // Simple animated HMD orbit with gentle bobbing
-        const float radius = desktop_mode_ ? 0.45f : 0.25f;
-        const float base_y = desktop_mode_ ? 1.75f : 1.6f;
-        const float bob = desktop_mode_ ? 0.1f : 0.05f;
-        data[0] = radius * static_cast<float>(std::sin(t));
-        data[1] = base_y + bob * static_cast<float>(std::sin(t * 0.5));
-        data[2] = -1.5f + radius * static_cast<float>(std::cos(t));
-        const float yaw = 0.35f * static_cast<float>(std::sin(t * 0.75));
-        const float halfYaw = yaw * 0.5f;
-        data[3] = 0.0f;
-        data[4] = std::sin(halfYaw);
-        data[5] = 0.0f;
-        data[6] = std::cos(halfYaw);
-        // Left controller near (-0.3,1.4,-1.3)
-        data[7] = -0.35f + 0.05f * static_cast<float>(std::sin(t * 1.2));
-        data[8] = 1.45f + 0.05f * static_cast<float>(std::cos(t * 0.8));
-        data[9] = -1.3f + 0.05f * static_cast<float>(std::cos(t * 1.4));
-        data[10]= 0; data[11]= 0; data[12]= 0; data[13]= 1;
-        // Right controller near (0.3,1.4,-1.3)
-        data[14]= 0.35f + 0.05f * static_cast<float>(std::sin(t * 1.15 + 1.0));
-        data[15]= 1.45f + 0.05f * static_cast<float>(std::cos(t * 0.9 + 0.5));
-        data[16]= -1.3f + 0.05f * static_cast<float>(std::cos(t * 1.3 + 0.3));
-        data[17]= 0; data[18]= 0; data[19]= 0; data[20]= 1;
-        CefRefPtr<CefBinaryValue> bin = CefBinaryValue::Create(data, sizeof(data));
-        CefRefPtr<CefProcessMessage> pm = CefProcessMessage::Create("VR_STATE");
-        pm->GetArgumentList()->SetBinary(0, bin);
-        frame->SendProcessMessage(PID_RENDERER, pm);
-        // Reschedule ~90Hz
-        const int interval_ms = desktop_mode_ ? 16 : 11;
-        CefPostDelayedTask(TID_UI, this, interval_ms);
-      }
-     private:
-      CefRefPtr<OffscreenClient> client_;
-      bool desktop_mode_ = false;
-      IMPLEMENT_REFCOUNTING(VrStateMsgTask);
-    };
-    CefPostTask(TID_UI, new VrStateMsgTask(this, false));
+  if (bridge_flag) {
+    std::cout << "[Client] IWER pose bridge enabled (" << (vr_mode_ ? "OpenVR" : "desktop synthetic") << ")\n";
   }
 
   // Desktop-mode synthetic pose: drive iwerBridge.applyPose via ExecuteJavaScript without renderer bridge.
@@ -316,21 +265,68 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
         }
         ++tick_;
         const double t = tick_ * (interval_ms_ / 1000.0);
-        const double radius = 0.40;
-        const double x = radius * std::sin(t);
+        const double orbit_radius = 0.40;
+        const double x = orbit_radius * std::sin(t);
         const double y = 1.72 + 0.08 * std::sin(t * 0.45);
-        const double z = -1.45 + radius * std::cos(t);
+        const double z = -1.45 + orbit_radius * std::cos(t);
         const double yaw = 0.35 * std::sin(t * 0.7);
         const double half_yaw = yaw * 0.5;
         const double quat_x = 0.0;
         const double quat_y = std::sin(half_yaw);
         const double quat_z = 0.0;
         const double quat_w = std::cos(half_yaw);
-        char js[512];
-        snprintf(js, sizeof(js),
-          "(function(){try{ if(window.iwerBridge&&typeof iwerBridge.applyPose==='function'){ iwerBridge.applyPose({hmd:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}}); } }catch(e){} })();",
-          x, y, z, quat_x, quat_y, quat_z, quat_w);
-        frame->ExecuteJavaScript(js, "", 0);
+
+        const double left_offset = -0.3 + 0.05 * std::sin(t * 1.3);
+        const double right_offset = 0.3 + 0.05 * std::sin(t * 1.1);
+        const double hand_y = 1.45 + 0.05 * std::cos(t * 0.6);
+        const double hand_z = -1.3 + 0.05 * std::cos(t * 0.9);
+        const double left_yaw = 0.25 * std::sin(t * 0.8);
+        const double right_yaw = -0.25 * std::sin(t * 0.85);
+        const double left_half = left_yaw * 0.5;
+        const double right_half = right_yaw * 0.5;
+
+        float hPos[3] = {static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+        float hQuat[4] = {static_cast<float>(quat_x), static_cast<float>(quat_y), static_cast<float>(quat_z), static_cast<float>(quat_w)};
+        float leftPos[3] = {static_cast<float>(left_offset), static_cast<float>(hand_y), static_cast<float>(hand_z)};
+        float leftQuat[4] = {static_cast<float>(std::sin(left_half)), 0.0f, 0.0f, static_cast<float>(std::cos(left_half))};
+        float rightPos[3] = {static_cast<float>(right_offset), static_cast<float>(hand_y), static_cast<float>(hand_z)};
+        float rightQuat[4] = {0.0f, 0.0f, static_cast<float>(std::sin(right_half)), static_cast<float>(std::cos(right_half))};
+
+        const bool sent = client_->SendPoseToRenderer(frame, hPos, hQuat, leftPos, leftQuat, rightPos, rightQuat);
+        if (!sent) {
+          char js[2048];
+          std::snprintf(js, sizeof(js),
+            "(function(){\n"
+            "  try {\n"
+            "    var state = {\n"
+            "      hmd:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]},\n"
+            "      left:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]},\n"
+            "      right:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}\n"
+            "    };\n"
+            "    var g = (typeof window !== 'undefined') ? window : this;\n"
+            "    var bridge = g && g.iwerBridge;\n"
+            "    var apply = bridge && bridge.applyPose;\n"
+            "    if (apply) {\n"
+            "      var ok = apply(state);\n"
+            "      g.__desktopPoseCount = (g.__desktopPoseCount || 0) + 1;\n"
+            "      if (g.__desktopPoseCount === 1 || (g.__desktopPoseCount %% 120) === 0) {\n"
+            "        try { console.log('[desktop-pose] ok=', ok, 'pos=', state.hmd.pos); } catch(e){}\n"
+            "      }\n"
+            "    } else {\n"
+            "      g.__desktopPoseWarn = (g.__desktopPoseWarn || 0) + 1;\n"
+            "      if (g.__desktopPoseWarn === 1 || (g.__desktopPoseWarn %% 60) === 0) {\n"
+            "        try { console.warn('[desktop-pose] iwerBridge.applyPose missing'); } catch(e){}\n"
+            "      }\n"
+            "    }\n"
+            "  } catch(e) {\n"
+            "    try { console.error('[desktop-pose] error', e); } catch(_e){}\n"
+            "  }\n"
+            "})();",
+            x, y, z, quat_x, quat_y, quat_z, quat_w,
+            left_offset, hand_y, hand_z, std::sin(left_half), 0.0, 0.0, std::cos(left_half),
+            right_offset, hand_y, hand_z, 0.0, 0.0, std::sin(right_half), std::cos(right_half));
+          frame->ExecuteJavaScript(js, "", 0);
+        }
         CefPostDelayedTask(TID_UI, this, interval_ms_);
       }
      private:
@@ -419,6 +415,42 @@ void OffscreenClient::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefStri
   CEF_REQUIRE_UI_THREAD();
   std::cout << "[Client] Title changed: " << title.ToString() << "\n";
   if (host_window_) SetWindowTextW(host_window_, std::wstring(title).c_str());
+}
+
+bool OffscreenClient::SendPoseToRenderer(CefRefPtr<CefFrame> frame,
+                                         const float* hmd_pos,
+                                         const float* hmd_quat,
+                                         const float* left_pos,
+                                         const float* left_quat,
+                                         const float* right_pos,
+                                         const float* right_quat) {
+  CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
+  if (!cmd.get() || !cmd->HasSwitch("enable-iwer-bridge")) {
+    return false;
+  }
+  if (!frame.get()) {
+    return false;
+  }
+
+  float payload[21] = {0};
+  auto copy3 = [](float* dst, const float* src) {
+    for (int i = 0; i < 3; ++i) dst[i] = src[i];
+  };
+  auto copy4 = [](float* dst, const float* src) {
+    for (int i = 0; i < 4; ++i) dst[i] = src[i];
+  };
+  copy3(&payload[0], hmd_pos);
+  copy4(&payload[3], hmd_quat);
+  copy3(&payload[7], left_pos);
+  copy4(&payload[10], left_quat);
+  copy3(&payload[14], right_pos);
+  copy4(&payload[17], right_quat);
+
+  CefRefPtr<CefBinaryValue> bin = CefBinaryValue::Create(payload, sizeof(payload));
+  CefRefPtr<CefProcessMessage> pm = CefProcessMessage::Create("VR_STATE");
+  pm->GetArgumentList()->SetBinary(0, bin);
+  frame->SendProcessMessage(PID_RENDERER, pm);
+  return true;
 }
 
 bool OffscreenClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,

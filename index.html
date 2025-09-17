@@ -71,8 +71,63 @@
         const statusEl = document.getElementById('status');
         const params = new URLSearchParams(location.search);
 
+        let lastPoseSequence = 0;
+        let appliedPoseCount = 0;
+
+        function setVec3(target, values) {
+            if (!target || typeof target.set !== 'function') return;
+            if (!Array.isArray(values) || values.length !== 3) return;
+            target.set(values[0], values[1], values[2]);
+        }
+
+        function setQuat(target, values) {
+            if (!target || typeof target.set !== 'function') return;
+            if (!Array.isArray(values) || values.length !== 4) return;
+            target.set(values[0], values[1], values[2], values[3]);
+        }
+
+        function applyPoseToController(controller, pose) {
+            if (!controller || !pose) return;
+            setVec3(controller.position, pose.pos);
+            setQuat(controller.quaternion, pose.quat);
+        }
+
+        function updatePoseFromBridge() {
+            const bridge = window.iwerBridge;
+            if (!bridge || typeof bridge.getPose !== 'function') return;
+            if (typeof bridge.hasPose === 'function' && !bridge.hasPose()) return;
+            const pose = bridge.getPose();
+            if (!pose) return;
+
+            const seq = typeof pose.sequence === 'number' ? pose.sequence : undefined;
+            if (seq !== undefined && seq === lastPoseSequence) return;
+            if (seq !== undefined) lastPoseSequence = seq;
+
+            if (pose.hmd) {
+                setVec3(xrDevice.position, pose.hmd.pos);
+                setQuat(xrDevice.quaternion, pose.hmd.quat);
+            }
+            if (xrDevice.controllers) {
+                if (pose.left) applyPoseToController(xrDevice.controllers.left, pose.left);
+                if (pose.right) applyPoseToController(xrDevice.controllers.right, pose.right);
+            }
+
+            appliedPoseCount++;
+            if (appliedPoseCount === 1 || (appliedPoseCount % 120) === 0) {
+                try {
+                    console.log('[index] applied iwer pose seq=', lastPoseSequence, 'hmd=', pose.hmd && pose.hmd.pos);
+                } catch (e) {}
+            }
+        }
+
+        const pollOverride = parseInt(params.get('posePoll') || '', 10);
+        const posePollMs = !isNaN(pollOverride) && pollOverride > 0 ? Math.max(4, pollOverride) : 16;
+        updatePoseFromBridge();
+        window.__iwerPoseTimer = setInterval(updatePoseFromBridge, posePollMs);
+
 
         function xrRenderLoop(timestamp, frame) {
+            updatePoseFromBridge();
             cube.rotation.y += 0.0001;
             renderer.render(scene, camera);
         }

@@ -100,6 +100,14 @@ private:
   int v8_vr_ms_ = 0;
   int v8_vr_tick_ = 0;
 
+  bool SendPoseToRenderer(CefRefPtr<CefFrame> frame,
+                          const float* hmd_pos,
+                          const float* hmd_quat,
+                          const float* left_pos,
+                          const float* left_quat,
+                          const float* right_pos,
+                          const float* right_quat);
+
   IMPLEMENT_REFCOUNTING(OffscreenClient);
   DISALLOW_COPY_AND_ASSIGN(OffscreenClient);
 };
