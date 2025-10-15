@@ -52,65 +52,24 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
   browser->GetHost()->Invalidate(PET_VIEW);
   std::cout << "[Client] Forced browser invalidation to trigger paint\n";
 
-  // Optional: minimal V8 ping to validate page JS runs without render handler
-  CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
-  if (cmd.get() && cmd->HasSwitch("v8-ping"))
-  {
-    int ms = (std::max)(100, atoi(cmd->GetSwitchValue("v8-ping").ToString().c_str()));
-    v8_ping_enabled_ = true;
-    v8_ping_ms_ = ms;
-    std::cout << "[Client] V8 ping enabled (interval=" << v8_ping_ms_ << " ms)\n";
-    class PingTask : public CefTask
-    {
-    public:
-      PingTask(CefRefPtr<OffscreenClient> c, int ms) : client_(c), ms_(ms) {}
-      void Execute() override
-      {
-        CEF_REQUIRE_UI_THREAD();
-        if (!client_.get())
-          return;
-        auto br = client_->GetBrowser();
-        if (!br.get())
-          return;
-        auto frame = br->GetMainFrame();
-        if (frame.get())
-        {
-          frame->ExecuteJavaScript(R"(window.__cefPingCount=(window.__cefPingCount||0)+1; console.log('[cef-ping]', window.__cefPingCount);)", "", 0);
-        }
-        // Re-schedule if still enabled
-        CefPostDelayedTask(TID_UI, new PingTask(client_, ms_), ms_);
-      }
-
-    private:
-      CefRefPtr<OffscreenClient> client_;
-      int ms_;
-      IMPLEMENT_REFCOUNTING(PingTask);
-    };
-    CefPostDelayedTask(TID_UI, new PingTask(this, v8_ping_ms_), v8_ping_ms_);
-  }
-
   // Real OpenVR pose -> page via iwerBridge.applyPose (browser-side injection)
-  // Enabled with --iwer-apply-pose[=ms] (defaults to 11ms when vr_mode_)
+  // In VR mode, pose updates are always enabled at 8ms intervals
+  // In desktop mode, synthetic pose animation runs at 16ms intervals
+  CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
   int pose_ms = 0;
-  int stage_switch = 0;
-  if (cmd.get())
+  if (cmd.get() && cmd->HasSwitch("iwer-apply-pose"))
   {
-    if (cmd->HasSwitch("v8-ext-stage"))
-    {
-      stage_switch = (std::max)(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
-    }
-    if (cmd->HasSwitch("iwer-apply-pose"))
-    {
-      pose_ms = (std::max)(5, atoi(cmd->GetSwitchValue("iwer-apply-pose").ToString().c_str()));
-      if (pose_ms <= 0)
-        pose_ms = 11;
-    }
-    else if (vr_mode_ && (cmd->HasSwitch("enable-iwer-bridge") || stage_switch >= 5))
-    {
-      pose_ms = (stage_switch >= 5) ? 8 : 11;
-    }
+    // Allow override of default timing
+    pose_ms = (std::max)(5, atoi(cmd->GetSwitchValue("iwer-apply-pose").ToString().c_str()));
+    if (pose_ms <= 0)
+      pose_ms = 8;
   }
-  const int desktop_interval_default = (stage_switch >= 5) ? 8 : 16;
+  else if (vr_mode_)
+  {
+    // Default VR mode: 8ms updates (~120Hz)
+    pose_ms = 8;
+  }
+  const int desktop_interval_default = 16;
   if (pose_ms > 0 && !vr_mode_)
   {
     std::cout << "[Client] Ignoring --iwer-apply-pose in desktop mode (no OpenVR data available)\n";
@@ -219,16 +178,12 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
     };
     CefPostDelayedTask(TID_UI, new VrPoseTask(this, pose_ms), pose_ms);
   }
-  const bool bridge_flag = cmd.get() && cmd->HasSwitch("enable-iwer-bridge");
-  const bool stage5_bridge = stage_switch >= 5;
-  if (bridge_flag || stage5_bridge)
-  {
-    const char *source = bridge_flag ? "--enable-iwer-bridge" : "--v8-ext-stage>=5";
-    const int report_interval = vr_mode_ ? pose_ms : desktop_interval_default;
-    std::cout << "[Client] IWER pose bridge enabled via " << source
-              << " (" << (vr_mode_ ? "OpenVR" : "desktop synthetic")
-              << ", interval=" << report_interval << "ms)\n";
-  }
+
+  // Log pose bridge info
+  const int report_interval = vr_mode_ ? pose_ms : desktop_interval_default;
+  std::cout << "[Client] IWER pose bridge enabled"
+            << " (" << (vr_mode_ ? "OpenVR" : "desktop synthetic")
+            << ", interval=" << report_interval << "ms)\n";
 
   // Desktop-mode synthetic pose: drive iwerBridge.applyPose via ExecuteJavaScript without renderer bridge.
   if (!vr_mode_)

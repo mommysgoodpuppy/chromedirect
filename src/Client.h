@@ -17,7 +17,8 @@ class OffscreenClient final : public CefClient,
                               public CefRenderHandler,
                               public CefDisplayHandler,
                               public CefRequestHandler,
-                              public CefLoadHandler {
+                              public CefLoadHandler
+{
 public:
   OffscreenClient(HWND host_window,
                   std::shared_ptr<Presenter> presenter,
@@ -37,32 +38,31 @@ public:
                                 CefRefPtr<CefFrame> frame,
                                 CefProcessId source_process,
                                 CefRefPtr<CefProcessMessage> message) override;
-  
 
   // CefLifeSpanHandler
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
 
   // CefRenderHandler
-  void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override;
-  bool GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo& screen_info) override;
+  void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect &rect) override;
+  bool GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo &screen_info) override;
   void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
                           PaintElementType type,
-                          const RectList& dirty_rects,
-                          const CefAcceleratedPaintInfo& info) override;
+                          const RectList &dirty_rects,
+                          const CefAcceleratedPaintInfo &info) override;
   void OnPaint(CefRefPtr<CefBrowser> browser,
                PaintElementType type,
-               const RectList& dirty_rects,
-               const void* buffer,
+               const RectList &dirty_rects,
+               const void *buffer,
                int width,
                int height) override;
 
   // CefDisplayHandler
-  void OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) override;
+  void OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString &title) override;
   bool OnConsoleMessage(CefRefPtr<CefBrowser> browser,
                         cef_log_severity_t level,
-                        const CefString& message,
-                        const CefString& source,
+                        const CefString &message,
+                        const CefString &source,
                         int line) override;
 
   // CefRequestHandler
@@ -91,22 +91,13 @@ private:
   bool vr_mode_ = false;
   std::atomic<bool> got_accel_{false};
 
-  // Minimal V8 ping (debug) to validate page script execution without renderer handler
-  bool v8_ping_enabled_ = false;
-  int v8_ping_ms_ = 0;
-
-  // Minimal VR postMessage (debug) to validate a browser->page data path
-  bool v8_vr_enabled_ = false;
-  int v8_vr_ms_ = 0;
-  int v8_vr_tick_ = 0;
-
   bool SendPoseToRenderer(CefRefPtr<CefFrame> frame,
-                          const float* hmd_pos,
-                          const float* hmd_quat,
-                          const float* left_pos,
-                          const float* left_quat,
-                          const float* right_pos,
-                          const float* right_quat);
+                          const float *hmd_pos,
+                          const float *hmd_quat,
+                          const float *left_pos,
+                          const float *left_quat,
+                          const float *right_pos,
+                          const float *right_quat);
 
   IMPLEMENT_REFCOUNTING(OffscreenClient);
   DISALLOW_COPY_AND_ASSIGN(OffscreenClient);
