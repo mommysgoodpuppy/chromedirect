@@ -68,84 +68,8 @@
             cube.position.z = -2;
             cube.position.y = 2;
 
-            let webxrBound = false;
-            let webxrRetryTimer = null;
-
-            function getWebXRHandle() {
-                const ext = window.cefExt &&
-                    window.cefExt.webxr;
-                return ext || null;
-            }
-
-            function clearWebXRRetry() {
-                if (webxrRetryTimer !== null) {
-                    clearInterval(webxrRetryTimer);
-                    webxrRetryTimer = null;
-                }
-            }
-
-            function scheduleWebXRRetry() {
-                if (webxrBound || webxrRetryTimer !== null) {
-                    return;
-                }
-                webxrRetryTimer = setInterval(() => {
-                    if (webxrBound) {
-                        clearWebXRRetry();
-                        return;
-                    }
-                    tryBindWebXRDevice("retry");
-                }, 1000);
-            }
-
-            function tryBindWebXRDevice(label) {
-                const handle = getWebXRHandle();
-                if (
-                    !handle ||
-                    typeof handle.setDevice !== "function"
-                ) {
-                    if (label !== "retry") {
-                        console.warn(
-                            "[index] cefExt.webxr.setDevice unavailable",
-                        );
-                    }
-                    return false;
-                }
-                try {
-                    const bound = !!handle.setDevice(xrDevice);
-                    if (bound) {
-                        const wasInactive = !webxrBound;
-                        webxrBound = true;
-                        clearWebXRRetry();
-                        if (wasInactive) {
-                            const tag = label
-                                ? " (" + label + ")"
-                                : "";
-                            console.log(
-                                "[index] cefExt.webxr native pose push enabled" +
-                                    tag,
-                            );
-                        }
-                        return true;
-                    }
-                    if (!webxrBound && label !== "retry") {
-                        console.warn(
-                            "[index] cefExt.webxr.setDevice returned false",
-                        );
-                    }
-                } catch (e) {
-                    if (label !== "retry") {
-                        console.warn(
-                            "[index] cefExt.webxr.setDevice failed",
-                            e,
-                        );
-                    }
-                }
-                return false;
-            }
-
-            if (!tryBindWebXRDevice("initial")) {
-                scheduleWebXRRetry();
-            }
+            // Bind native WebXR device
+            window.cefExt.webxr.setDevice(xrDevice);
 
             function xrRenderLoop(timestamp, frame) {
                 renderer.render(scene, camera);
@@ -153,101 +77,34 @@
             }
 
             async function startXrSession() {
-                if (!navigator.xr) {
-                    console.error("WebXR not supported!");
-                    return;
-                }
-                if (
-                    !await navigator.xr.isSessionSupported(
-                        "immersive-vr",
-                    )
-                ) {
-                    console.error(
-                        "Immersive VR not supported!",
-                    );
-                    return;
-                }
-
-                if (
-                    !webxrBound &&
-                    !tryBindWebXRDevice("session")
-                ) {
-                    scheduleWebXRRetry();
-                }
-
-                try {
-                    // In IWER, immersive-ar can start without user gesture; use it to auto-enter
-                    const session = await navigator.xr
-                        .requestSession("immersive-ar", {
-                            requiredFeatures: ["local-floor"],
-                        });
-                    console.log("[index] XR session started");
-
-                    session.addEventListener("end", () => {
-                        console.log("[index] XR Session Ended");
-                        renderer.setAnimationLoop(null);
-                        const webxrWasActive = webxrBound;
-                        const handle = getWebXRHandle();
-                        if (
-                            webxrWasActive && handle &&
-                            typeof handle.clearDevice ===
-                                "function"
-                        ) {
-                            try {
-                                handle.clearDevice();
-                            } catch (e) {
-                                console.warn(
-                                    "[index] cefExt.webxr.clearDevice failed",
-                                    e,
-                                );
-                            }
-                        }
-                        webxrBound = false;
-                        if (!webxrRetryTimer) {
-                            scheduleWebXRRetry();
-                        }
+                const session = await navigator.xr
+                    .requestSession("immersive-ar", {
+                        requiredFeatures: ["local-floor"],
                     });
+                console.log("[index] XR session started");
 
-                    // Prefer an explicit XRWebGLLayer with antialias enabled
-                    try {
-                        const gl = renderer.getContext();
-                        if (gl.makeXRCompatible) {
-                            await gl.makeXRCompatible();
-                        }
-                        const baseLayer = new XRWebGLLayer(
-                            session,
-                            gl,
-                            {
-                                antialias: true,
-                                alpha: false,
-                                depth: false,
-                                stencil: false,
-                            },
-                        );
-                        session.updateRenderState({
-                            baseLayer,
-                        });
-                    } catch (e) {
-                        console.warn(
-                            "XRWebGLLayer AA setup failed (falling back):",
-                            e,
-                        );
-                    }
+                session.addEventListener("end", () => {
+                    console.log("[index] XR Session Ended");
+                    renderer.setAnimationLoop(null);
+                });
 
-                    const maybePromise = renderer.xr.setSession(
-                        session,
-                    );
-                    if (
-                        maybePromise &&
-                        typeof maybePromise.then === "function"
-                    ) {
-                        await maybePromise;
-                    }
-                    renderer.setAnimationLoop(xrRenderLoop);
-                    console.log("[index] Animation loop set");
-                } catch (err) {
-                    console.error("XR session failed:", err);
-                }
+                const gl = renderer.getContext();
+                await gl.makeXRCompatible();
+                const baseLayer = new XRWebGLLayer(
+                    session,
+                    gl,
+                    {
+                        antialias: true,
+                        alpha: false,
+                        depth: false,
+                        stencil: false,
+                    },
+                );
+                session.updateRenderState({ baseLayer });
+
+                await renderer.xr.setSession(session);
+                renderer.setAnimationLoop(xrRenderLoop);
+                console.log("[index] Animation loop set");
             }
 
             // Auto-start XR session after IWER installs the runtime
