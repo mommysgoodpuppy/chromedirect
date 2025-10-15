@@ -193,10 +193,9 @@ bool OpenVRPresenter::InitializeOpenVR()
   return true;
 }
 
-void OpenVRPresenter::ConfigurePanoramaShader(bool enable, float fovHalfRadians)
+void OpenVRPresenter::SetFOVHalfRadians(float fovHalfRadians)
 {
   std::lock_guard<std::mutex> lock(mtx_);
-  shader_enabled_ = enable;
   fov_half_radians_ = fovHalfRadians;
 }
 
@@ -295,8 +294,6 @@ float4 main(PSIn i) : SV_Target {
 
 bool OpenVRPresenter::EnsureShaderPipeline(UINT outWidth, UINT outHeight)
 {
-  if (!shader_enabled_)
-    return false;
   if (!device_ || !context_)
     return false;
 
@@ -606,18 +603,15 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     }
   }
 
-  // Create or reuse the shared texture target. If shader path is enabled, ensure RTV target exists.
+  // Create or reuse the shared texture target. Ensure RTV target exists for shader rendering.
   D3D11_TEXTURE2D_DESC submitDesc = {};
   submitTex->GetDesc(&submitDesc);
 
-  if (shader_enabled_)
+  // Ensure output surface matches overlay/presenter target size (width_, height_)
+  if (!EnsureShaderPipeline(static_cast<UINT>(width_), static_cast<UINT>(height_)))
   {
-    // Ensure output surface matches overlay/presenter target size (width_, height_)
-    if (!EnsureShaderPipeline(static_cast<UINT>(width_), static_cast<UINT>(height_)))
-    {
-      std::cerr << "[OpenVR] WARNING: Shader pipeline unavailable; falling back to copy\n";
-      shader_enabled_ = false; // disable for subsequent frames
-    }
+    std::cerr << "[OpenVR] ERROR: Failed to ensure shader pipeline\n";
+    return;
   }
 
   // Shader path: render SBS -> stereo panorama into shared_legacy_tex_

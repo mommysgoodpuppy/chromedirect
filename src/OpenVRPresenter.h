@@ -38,7 +38,7 @@ public:
 
   // Configure shader-based panorama transform (from SBS input)
   // fovHalfRadians: half FOV in radians for the projection.
-  void ConfigurePanoramaShader(bool enable, float fovHalfRadians);
+  void SetFOVHalfRadians(float fovHalfRadians);
   void SetWarpFollowHead(bool enable);
 
   // Get the D3D11 device for CEF compatibility
@@ -79,8 +79,7 @@ private:
   Microsoft::WRL::ComPtr<ID3D11Texture2D> copy_tex_;
   D3D11_TEXTURE2D_DESC copy_desc_ = {};
 
-  // Optional: render into shared_legacy_tex_ via a shader pipeline
-  bool shader_enabled_ = false;
+  // Shader pipeline for rendering into shared_legacy_tex_
   float fov_half_radians_ = 0.78539816339f; // ~45 deg
   bool warp_follow_head_ = false;
   Microsoft::WRL::ComPtr<ID3D11VertexShader> vs_;

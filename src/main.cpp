@@ -371,10 +371,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       return -1;
     }
     std::cout << "[CEF Demo] OpenVR presenter initialized successfully\n";
-    // In VR mode, always enable shader panorama
+    // In VR mode, configure shader panorama FOV
     float fov_half_rad = (fov_deg * 0.5f) * 3.1415926535f / 180.0f;
-    vr_presenter->ConfigurePanoramaShader(true, fov_half_rad);
-    std::cout << "[CEF Demo] Shader panorama enabled (FOV half rad=" << fov_half_rad << ")\n";
+    vr_presenter->SetFOVHalfRadians(fov_half_rad);
+    std::cout << "[CEF Demo] Shader panorama FOV configured (half rad=" << fov_half_rad << ")\n";
     vr_presenter->SetWarpFollowHead(warp_follow_head);
     if (warp_follow_head)
       std::cout << "[CEF Demo] Warp follows head yaw enabled\n";
