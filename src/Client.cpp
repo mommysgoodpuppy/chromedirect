@@ -471,23 +471,6 @@ bool OffscreenClient::SendPoseToRenderer(CefRefPtr<CefFrame> frame,
                                          const float *right_pos,
                                          const float *right_quat)
 {
-  CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
-  bool allow_native = false;
-  int stage_switch = 0;
-  if (cmd.get())
-  {
-    allow_native = cmd->HasSwitch("enable-iwer-bridge");
-    if (cmd->HasSwitch("v8-ext-stage"))
-    {
-      stage_switch = (std::max)(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
-      if (stage_switch >= 5)
-        allow_native = true;
-    }
-  }
-  if (!allow_native)
-  {
-    return false;
-  }
   if (!frame.get())
   {
     return false;
@@ -561,18 +544,6 @@ bool OffscreenClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
   return false; // allow
 }
 
-/* void OffscreenClient::OnLoadingStateChange(CefRefPtr<CefBrowser> browser,
-                                           bool isLoading,
-                                           bool canGoBack,
-                                           bool canGoForward) {
-  CEF_REQUIRE_UI_THREAD();
-  std::cout << "[Load] state change: isLoading=" << (isLoading?"1":"0")
-            << " canGoBack=" << (canGoBack?"1":"0")
-            << " canGoForward=" << (canGoForward?"1":"0") << "\n";
-} */
-
-// (Load and response diagnostics removed)
-
 bool OffscreenClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                                CefRefPtr<CefFrame> frame,
                                                CefProcessId source_process,
@@ -608,23 +579,4 @@ void OffscreenClient::OnLoadEnd(CefRefPtr<CefBrowser> browser,
   CEF_REQUIRE_UI_THREAD();
   if (!frame.get() || !frame->IsMain())
     return;
-  // Use page-side injection to define a simple bridge when stage>=2 to avoid render-process fragility.
-  CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
-  int stage = 0;
-  if (cmd.get() && cmd->HasSwitch("v8-ext-stage"))
-  {
-    stage = (std::max)(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
-  }
-  if (stage >= 2)
-  {
-    const char *js = R"JS((function(){
-      try {
-        var g = (typeof window !== 'undefined') ? window : this;
-        if (!g.cefExt) g.cefExt = {};
-        if (typeof g.cefExt.ping !== 'function') g.cefExt.ping = function(x){ return (x||0)+1; };
-        try { console.log('[cef-ext] installed via OnLoadEnd'); } catch(e){}
-      } catch(e) {}
-    })();)JS";
-    frame->ExecuteJavaScript(js, "", 0);
-  }
 }
