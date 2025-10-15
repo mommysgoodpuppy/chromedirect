@@ -8,11 +8,11 @@ MinimalRenderHandler::MinimalRenderHandler() {}
 
 void MinimalRenderHandler::OnWebKitInitialized()
 {
-  // Register the V8 extension that provides cefExt.stage5.setDevice/clearDevice
-  class Stage5Handler : public CefV8Handler
+  // Register the V8 extension that provides cefExt.webxr.setDevice/clearDevice
+  class WebXRExtensionHandler : public CefV8Handler
   {
   public:
-    explicit Stage5Handler(MinimalRenderHandler *owner) : owner_(owner) {}
+    explicit WebXRExtensionHandler(MinimalRenderHandler *owner) : owner_(owner) {}
     bool Execute(const CefString &name,
                  CefRefPtr<CefV8Value> /*object*/,
                  const CefV8ValueList &arguments,
@@ -21,7 +21,7 @@ void MinimalRenderHandler::OnWebKitInitialized()
     {
       if (!owner_)
         return false;
-      if (name == "__stage5SetDevice")
+      if (name == "__setDevice")
       {
         CefRefPtr<CefV8Context> ctx = CefV8Context::GetCurrentContext();
         bool ok = false;
@@ -32,7 +32,7 @@ void MinimalRenderHandler::OnWebKitInitialized()
         retval = CefV8Value::CreateBool(ok);
         return true;
       }
-      if (name == "__stage5ClearDevice")
+      if (name == "__clearDevice")
       {
         owner_->ClearDevice();
         retval = CefV8Value::CreateBool(true);
@@ -43,17 +43,17 @@ void MinimalRenderHandler::OnWebKitInitialized()
 
   private:
     MinimalRenderHandler *owner_;
-    IMPLEMENT_REFCOUNTING(Stage5Handler);
+    IMPLEMENT_REFCOUNTING(WebXRExtensionHandler);
   };
 
-  const char *kStage5JS =
+  const char *kWebXRExtensionJS =
       "if (!cefExt) var cefExt = {};\n"
-      "if (!cefExt.stage5) cefExt.stage5 = {};\n"
-      "native function __stage5SetDevice();\n"
-      "native function __stage5ClearDevice();\n"
-      "cefExt.stage5.setDevice = function(dev){ return __stage5SetDevice(dev); };\n"
-      "cefExt.stage5.clearDevice = function(){ return __stage5ClearDevice(); };\n";
-  CefRegisterExtension("v8/cef_stage5", kStage5JS, new Stage5Handler(this));
+      "if (!cefExt.webxr) cefExt.webxr = {};\n"
+      "native function __setDevice();\n"
+      "native function __clearDevice();\n"
+      "cefExt.webxr.setDevice = function(dev){ return __setDevice(dev); };\n"
+      "cefExt.webxr.clearDevice = function(){ return __clearDevice(); };\n";
+  CefRegisterExtension("v8/cef_webxr", kWebXRExtensionJS, new WebXRExtensionHandler(this));
 }
 
 void MinimalRenderHandler::OnContextCreated(CefRefPtr<CefBrowser> browser,
@@ -195,7 +195,7 @@ bool MinimalRenderHandler::BindDevice(CefRefPtr<CefV8Context> context, CefRefPtr
 {
   if (!context.get() || !device.get() || !device->IsObject())
   {
-    std::cout << "[MinimalRenderHandler] WARN stage5.setDevice invalid arguments" << std::endl;
+    std::cout << "[MinimalRenderHandler] WARN webxr.setDevice invalid arguments" << std::endl;
     return false;
   }
 
@@ -253,11 +253,11 @@ bool MinimalRenderHandler::BindDevice(CefRefPtr<CefV8Context> context, CefRefPtr
   const bool ok = device_position_set_.get() && device_quaternion_set_.get();
   if (!ok)
   {
-    std::cout << "[MinimalRenderHandler] WARN stage5.setDevice missing position/quaternion setters" << std::endl;
+    std::cout << "[MinimalRenderHandler] WARN webxr.setDevice missing position/quaternion setters" << std::endl;
   }
   else
   {
-    std::cout << "[MinimalRenderHandler] stage5.setDevice bound" << std::endl;
+    std::cout << "[MinimalRenderHandler] webxr.setDevice bound" << std::endl;
   }
 
   if (ok && has_pose_)
@@ -271,7 +271,7 @@ void MinimalRenderHandler::ClearDevice()
 {
   if (device_context_.get())
   {
-    std::cout << "[MinimalRenderHandler] stage5.clearDevice" << std::endl;
+    std::cout << "[MinimalRenderHandler] webxr.clearDevice" << std::endl;
   }
   device_context_ = nullptr;
   device_value_ = nullptr;
@@ -380,7 +380,7 @@ void MinimalRenderHandler::LogPoseApply(bool success, const std::string &reason)
   if (!success)
   {
     device_apply_fail_++;
-    std::cout << "[MinimalRenderHandler] stage5.applyPose FAILED count=" << device_apply_count_
+    std::cout << "[MinimalRenderHandler] webxr.applyPose FAILED count=" << device_apply_count_
               << " fails=" << device_apply_fail_ << " reason=" << reason << std::endl;
     last_log_time_ = now;
     return;
@@ -391,7 +391,7 @@ void MinimalRenderHandler::LogPoseApply(bool success, const std::string &reason)
   {
     double elapsed_ms = std::chrono::duration<double, std::milli>(now - first_apply_time_).count();
     double hz = elapsed_ms > 0.0 ? (device_apply_count_ * 1000.0) / elapsed_ms : 0.0;
-    std::cout << "[MinimalRenderHandler] stage5.applyPose OK count=" << device_apply_count_
+    std::cout << "[MinimalRenderHandler] webxr.applyPose OK count=" << device_apply_count_
               << " avg=" << hz << "Hz fails=" << device_apply_fail_ << std::endl;
     last_log_time_ = now;
   }

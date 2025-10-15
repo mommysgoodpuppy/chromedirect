@@ -6,7 +6,7 @@
 #include <cstdint>
 
 // Minimal render-process handler that provides:
-// - V8 extension for stage5 (setDevice/clearDevice) for WebXR emulation
+// - V8 extension (cefExt.webxr) for setDevice/clearDevice for WebXR emulation
 // - Receives VR_STATE messages from browser process and applies pose to bound device
 class MinimalRenderHandler : public CefRenderProcessHandler
 {

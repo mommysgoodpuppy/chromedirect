@@ -135,7 +135,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   void *sandbox_info = nullptr;
 #endif
 
-  // Initialize the minimal handler instance so SimpleApp can return it when staged.
+  // Initialize the minimal handler instance so SimpleApp can return it
   if (!g_minimal_handler.get())
     g_minimal_handler = new MinimalRenderHandler();
   // Use a single app implementation for all processes.

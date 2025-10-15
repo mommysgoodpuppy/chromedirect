@@ -1,230 +1,325 @@
 <!DOCTYPE html>
 <html>
-<head>
-    <title>WebXR IWER Stereo Demo</title>
-    <script src="https://unpkg.com/iwer@latest/build/iwer.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <style>
-        body { margin: 0; overflow: hidden; background: transparent; }
-        canvas { width: 100%; height: 100%; }
-        #xr-button {
-            position: absolute;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            padding: 12px 24px;
-            z-index: 999;
-        }
-    </style>
-</head>
-<body>
-    <button id="xr-button">Enter XR</button>
-    <div id="status" style="position:absolute;top:60px;left:50%;transform:translateX(-50%);padding:8px 12px;background:#607D8B;color:white;font-family:system-ui, sans-serif;border-radius:6px;z-index:999">Idle</div>
-    <script>
-        // Initialize IWER
-        console.log('[index] Creating XRDevice...');
-        const xrDevice = new IWER.XRDevice(IWER.metaQuest3, {
-            referenceSpaceType: 'local-floor'
-        });
-        xrDevice.installRuntime();
-        console.log('[index] IWER runtime installed');
-                
-        // Configure stereo rendering
-        xrDevice.stereoEnabled = true;
-        xrDevice.ipd = 0.068;
-        console.log('[index] XRDevice config set stereoEnabled, ipd=', xrDevice.ipd);
-
-        // Three.js setup
-        const scene = new THREE.Scene();
-        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-        // Improve perceived AA by matching device pixel ratio (override with ?dpr=1)
-        const dprParam = new URLSearchParams(location.search).get('dpr');
-        const DPR = dprParam ? Math.max(1, Math.min(4, parseFloat(dprParam))) : window.devicePixelRatio || 1;
-        renderer.setPixelRatio(DPR);
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.xr.enabled = true;
-        renderer.setClearColor(0x000000, 0);
-        document.body.appendChild(renderer.domElement);
-
-        // Create proper camera configuration
-        const camera = new THREE.PerspectiveCamera(
-            90, // FOV
-            window.innerWidth / window.innerHeight, // Aspect ratio
-            0.1, // Near plane (MUST be > 0)
-            1000 // Far plane
-        );
-        
-        // Add lighting
-        const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(1, 1, 1);
-        scene.add(light);
-        scene.add(new THREE.AmbientLight(0x404040));
-
-        // Add test object
-        const geometry = new THREE.BoxGeometry();
-        const material = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
-        const cube = new THREE.Mesh(geometry, material);
-        scene.add(cube);
-        cube.position.z = -2;
-        cube.position.y = 2;
-
-        // XR Session handling (auto-start capable via IWER polyfill)
-        const statusEl = document.getElementById('status');
-        const params = new URLSearchParams(location.search);
-        let stage5Bound = false;
-        let stage5RetryTimer = null;
-
-        function getStage5Handle() {
-            const ext = window.cefExt && window.cefExt.stage5;
-            return ext || null;
-        }
-
-        function clearStage5Retry() {
-            if (stage5RetryTimer !== null) {
-                clearInterval(stage5RetryTimer);
-                stage5RetryTimer = null;
+    <head>
+        <title>WebXR IWER Stereo Demo</title>
+        <script src="https://unpkg.com/iwer@latest/build/iwer.min.js"></script>
+        <script
+            src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"
+        ></script>
+        <style>
+            body {
+                margin: 0;
+                overflow: hidden;
+                background: transparent;
             }
-        }
-
-        function scheduleStage5Retry() {
-            if (stage5Bound || stage5RetryTimer !== null) {
-                return;
+            canvas {
+                width: 100%;
+                height: 100%;
             }
-            stage5RetryTimer = setInterval(() => {
-                if (stage5Bound) {
-                    clearStage5Retry();
+            #xr-button {
+                position: absolute;
+                top: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                padding: 12px 24px;
+                z-index: 999;
+            }
+        </style>
+    </head>
+    <body>
+        <button id="xr-button">Enter XR</button>
+        <div
+            id="status"
+            style="position: absolute; top: 60px; left: 50%; transform: translateX(-50%); padding: 8px 12px; background: #607d8b; color: white; font-family: system-ui, sans-serif; border-radius: 6px; z-index: 999"
+        >
+            Idle
+        </div>
+        <script>
+            // Initialize IWER
+            console.log("[index] Creating XRDevice...");
+            const xrDevice = new IWER.XRDevice(
+                IWER.metaQuest3,
+                {
+                    referenceSpaceType: "local-floor",
+                },
+            );
+            xrDevice.installRuntime();
+            console.log("[index] IWER runtime installed");
+
+            // Configure stereo rendering
+            xrDevice.stereoEnabled = true;
+            xrDevice.ipd = 0.068;
+            console.log(
+                "[index] XRDevice config set stereoEnabled, ipd=",
+                xrDevice.ipd,
+            );
+
+            // Three.js setup
+            const scene = new THREE.Scene();
+            const renderer = new THREE.WebGLRenderer({
+                antialias: true,
+                alpha: true,
+            });
+            // Improve perceived AA by matching device pixel ratio (override with ?dpr=1)
+            const dprParam = new URLSearchParams(
+                location.search,
+            ).get("dpr");
+            const DPR = dprParam
+                ? Math.max(1, Math.min(4, parseFloat(dprParam)))
+                : window.devicePixelRatio || 1;
+            renderer.setPixelRatio(DPR);
+            renderer.setSize(
+                window.innerWidth,
+                window.innerHeight,
+            );
+            renderer.xr.enabled = true;
+            renderer.setClearColor(0x000000, 0);
+            document.body.appendChild(renderer.domElement);
+
+            // Create proper camera configuration
+            const camera = new THREE.PerspectiveCamera(
+                90, // FOV
+                window.innerWidth / window.innerHeight, // Aspect ratio
+                0.1, // Near plane (MUST be > 0)
+                1000, // Far plane
+            );
+
+            // Add lighting
+            const light = new THREE.DirectionalLight(
+                0xffffff,
+                1,
+            );
+            light.position.set(1, 1, 1);
+            scene.add(light);
+            scene.add(new THREE.AmbientLight(0x404040));
+
+            // Add test object
+            const geometry = new THREE.BoxGeometry();
+            const material = new THREE.MeshStandardMaterial({
+                color: 0x00ff00,
+            });
+            const cube = new THREE.Mesh(geometry, material);
+            scene.add(cube);
+            cube.position.z = -2;
+            cube.position.y = 2;
+
+            // XR Session handling (auto-start capable via IWER polyfill)
+            const statusEl = document.getElementById("status");
+            const params = new URLSearchParams(location.search);
+            let webxrBound = false;
+            let webxrRetryTimer = null;
+
+            function getWebXRHandle() {
+                const ext = window.cefExt &&
+                    window.cefExt.webxr;
+                return ext || null;
+            }
+
+            function clearWebXRRetry() {
+                if (webxrRetryTimer !== null) {
+                    clearInterval(webxrRetryTimer);
+                    webxrRetryTimer = null;
+                }
+            }
+
+            function scheduleWebXRRetry() {
+                if (webxrBound || webxrRetryTimer !== null) {
                     return;
                 }
-                tryBindStage5Device('retry');
-            }, 1000);
-        }
+                webxrRetryTimer = setInterval(() => {
+                    if (webxrBound) {
+                        clearWebXRRetry();
+                        return;
+                    }
+                    tryBindWebXRDevice("retry");
+                }, 1000);
+            }
 
-        function tryBindStage5Device(label) {
-            const handle = getStage5Handle();
-            if (!handle || typeof handle.setDevice !== 'function') {
-                if (label !== 'retry') {
-                    console.warn('[index] stage5.setDevice unavailable');
+            function tryBindWebXRDevice(label) {
+                const handle = getWebXRHandle();
+                if (
+                    !handle ||
+                    typeof handle.setDevice !== "function"
+                ) {
+                    if (label !== "retry") {
+                        console.warn(
+                            "[index] cefExt.webxr.setDevice unavailable",
+                        );
+                    }
+                    return false;
+                }
+                try {
+                    const bound = !!handle.setDevice(xrDevice);
+                    if (bound) {
+                        const wasInactive = !webxrBound;
+                        webxrBound = true;
+                        clearWebXRRetry();
+                        if (wasInactive) {
+                            const tag = label
+                                ? " (" + label + ")"
+                                : "";
+                            console.log(
+                                "[index] cefExt.webxr native pose push enabled" +
+                                    tag,
+                            );
+                        }
+                        return true;
+                    }
+                    if (!webxrBound && label !== "retry") {
+                        console.warn(
+                            "[index] cefExt.webxr.setDevice returned false",
+                        );
+                    }
+                } catch (e) {
+                    if (label !== "retry") {
+                        console.warn(
+                            "[index] cefExt.webxr.setDevice failed",
+                            e,
+                        );
+                    }
                 }
                 return false;
             }
-            try {
-                const bound = !!handle.setDevice(xrDevice);
-                if (bound) {
-                    const wasInactive = !stage5Bound;
-                    stage5Bound = true;
-                    clearStage5Retry();
-                    if (wasInactive) {
-                        const tag = label ? ' (' + label + ')' : '';
-                        console.log('[index] stage5 native pose push enabled' + tag);
-                    }
-                    return true;
+
+            if (!tryBindWebXRDevice("initial")) {
+                scheduleWebXRRetry();
+            }
+
+            function xrRenderLoop(timestamp, frame) {
+                renderer.render(scene, camera);
+            }
+
+            async function startXrSession() {
+                if (!navigator.xr) {
+                    statusEl.textContent =
+                        "WebXR not supported!";
+                    statusEl.style.backgroundColor = "#F44336";
+                    return;
                 }
-                if (!stage5Bound && label !== 'retry') {
-                    console.warn('[index] stage5.setDevice returned false');
+                if (
+                    !await navigator.xr.isSessionSupported(
+                        "immersive-vr",
+                    )
+                ) {
+                    statusEl.textContent =
+                        "Immersive VR not supported!";
+                    statusEl.style.backgroundColor = "#F44336";
+                    return;
                 }
-            } catch (e) {
-                if (label !== 'retry') {
-                    console.warn('[index] stage5.setDevice failed', e);
+
+                if (
+                    !webxrBound &&
+                    !tryBindWebXRDevice("session")
+                ) {
+                    scheduleWebXRRetry();
                 }
-            }
-            return false;
-        }
 
-        if (!tryBindStage5Device('initial')) {
-            scheduleStage5Retry();
-        }
-
-        function xrRenderLoop(timestamp, frame) {
-            renderer.render(scene, camera);
-        }
-
-        async function startXrSession() {
-            if (!navigator.xr) {
-                statusEl.textContent = 'WebXR not supported!';
-                statusEl.style.backgroundColor = '#F44336';
-                return;
-            }
-            if (!await navigator.xr.isSessionSupported('immersive-vr')) {
-                statusEl.textContent = 'Immersive VR not supported!';
-                statusEl.style.backgroundColor = '#F44336';
-                return;
-            }
-
-            if (!stage5Bound && !tryBindStage5Device('session')) {
-                scheduleStage5Retry();
-            }
-
-            try {
-                // In IWER, immersive-ar can start without user gesture; use it to auto-enter
-                const session = await navigator.xr.requestSession('immersive-ar', {
-                    requiredFeatures: ['local-floor']
-                });
-                statusEl.textContent = 'XR Session Active';
-                statusEl.style.backgroundColor = '#2196F3';
-                console.log('[index] XR session started');
-
-                session.addEventListener('end', () => {
-                    statusEl.textContent = 'XR Session Ended';
-                    statusEl.style.backgroundColor = '#607D8B';
-                    renderer.setAnimationLoop(null);
-                    const stage5WasActive = stage5Bound;
-                    const handle = getStage5Handle();
-                    if (stage5WasActive && handle && typeof handle.clearDevice === 'function') {
-                        try {
-                            handle.clearDevice();
-                        } catch (e) {
-                            console.warn('[index] stage5.clearDevice failed', e);
-                        }
-                    }
-                    stage5Bound = false;
-                    if (!stage5RetryTimer) {
-                        scheduleStage5Retry();
-                    }
-                });
-
-                // Prefer an explicit XRWebGLLayer with antialias enabled
                 try {
-                    const gl = renderer.getContext();
-                    if (gl.makeXRCompatible) await gl.makeXRCompatible();
-                    const baseLayer = new XRWebGLLayer(session, gl, {
-                        antialias: true,
-                        alpha: false,
-                        depth: false,
-                        stencil: false
+                    // In IWER, immersive-ar can start without user gesture; use it to auto-enter
+                    const session = await navigator.xr
+                        .requestSession("immersive-ar", {
+                            requiredFeatures: ["local-floor"],
+                        });
+                    statusEl.textContent = "XR Session Active";
+                    statusEl.style.backgroundColor = "#2196F3";
+                    console.log("[index] XR session started");
+
+                    session.addEventListener("end", () => {
+                        statusEl.textContent =
+                            "XR Session Ended";
+                        statusEl.style.backgroundColor =
+                            "#607D8B";
+                        renderer.setAnimationLoop(null);
+                        const webxrWasActive = webxrBound;
+                        const handle = getWebXRHandle();
+                        if (
+                            webxrWasActive && handle &&
+                            typeof handle.clearDevice ===
+                                "function"
+                        ) {
+                            try {
+                                handle.clearDevice();
+                            } catch (e) {
+                                console.warn(
+                                    "[index] cefExt.webxr.clearDevice failed",
+                                    e,
+                                );
+                            }
+                        }
+                        webxrBound = false;
+                        if (!webxrRetryTimer) {
+                            scheduleWebXRRetry();
+                        }
                     });
-                    session.updateRenderState({ baseLayer });
-                } catch (e) {
-                    console.warn('XRWebGLLayer AA setup failed (falling back):', e);
-                }
 
-                const maybePromise = renderer.xr.setSession(session);
-                if (maybePromise && typeof maybePromise.then === 'function') {
-                    await maybePromise;
+                    // Prefer an explicit XRWebGLLayer with antialias enabled
+                    try {
+                        const gl = renderer.getContext();
+                        if (gl.makeXRCompatible) {
+                            await gl.makeXRCompatible();
+                        }
+                        const baseLayer = new XRWebGLLayer(
+                            session,
+                            gl,
+                            {
+                                antialias: true,
+                                alpha: false,
+                                depth: false,
+                                stencil: false,
+                            },
+                        );
+                        session.updateRenderState({
+                            baseLayer,
+                        });
+                    } catch (e) {
+                        console.warn(
+                            "XRWebGLLayer AA setup failed (falling back):",
+                            e,
+                        );
+                    }
+
+                    const maybePromise = renderer.xr.setSession(
+                        session,
+                    );
+                    if (
+                        maybePromise &&
+                        typeof maybePromise.then === "function"
+                    ) {
+                        await maybePromise;
+                    }
+                    renderer.setAnimationLoop(xrRenderLoop);
+                    console.log("[index] Animation loop set");
+                } catch (err) {
+                    console.error("XR session failed:", err);
+                    statusEl.textContent = `XR Error: ${
+                        err && err.message ? err.message : err
+                    }`;
+                    statusEl.style.backgroundColor = "#F44336";
                 }
-                renderer.setAnimationLoop(xrRenderLoop);
-                console.log('[index] Animation loop set');
-            } catch (err) {
-                console.error('XR session failed:', err);
-                statusEl.textContent = `XR Error: ${err && err.message ? err.message : err}`;
-                statusEl.style.backgroundColor = '#F44336';
             }
-        }
 
-        // Manual button entry and auto-start attempt
-        document.getElementById('xr-button').addEventListener('click', () => { startXrSession(); });
-        // Kick off automatically after IWER installs the runtime
-        Promise.resolve().then(() => startXrSession());
+            // Manual button entry and auto-start attempt
+            document.getElementById("xr-button")
+                .addEventListener("click", () => {
+                    startXrSession();
+                });
+            // Kick off automatically after IWER installs the runtime
+            Promise.resolve().then(() => startXrSession());
 
-        // Handle window resize
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
+            // Handle window resize
+            window.addEventListener("resize", () => {
+                camera.aspect = window.innerWidth /
+                    window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(
+                    window.innerWidth,
+                    window.innerHeight,
+                );
+            });
 
-        // Initial camera position
-        camera.position.set(0, 1.6, 0);
-        renderer.render(scene, camera);
-    </script>
-</body>
+            // Initial camera position
+            camera.position.set(0, 1.6, 0);
+            renderer.render(scene, camera);
+        </script>
+    </body>
 </html>
