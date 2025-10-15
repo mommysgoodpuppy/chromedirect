@@ -12,7 +12,6 @@
 #include <include/cef_render_process_handler.h>
 #include <include/wrapper/cef_closure_task.h>
 #include <include/wrapper/cef_library_loader.h>
-#include "RendererBridge.h"
 
 #include <windows.h>
 #include <string>

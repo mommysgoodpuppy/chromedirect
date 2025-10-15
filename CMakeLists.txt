@@ -64,8 +64,6 @@ set(APP_SOURCES
   src/D3DPresenter.cpp
   src/OpenVRPresenter.h
   src/OpenVRPresenter.cpp
-  src/RendererBridge.h
-  src/RendererBridge.cpp
   src/MinimalRenderHandler.h
   src/MinimalRenderHandler.cpp
   src/CefAppHandlers.h
