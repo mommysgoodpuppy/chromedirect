@@ -31,47 +31,57 @@ OffscreenClient::OffscreenClient(HWND host_window,
       height_(height),
       scale_(scale),
       frame_rate_(frame_rate),
-      vr_mode_(vr_mode) {
+      vr_mode_(vr_mode)
+{
   std::cout << "[Client] OffscreenClient created (" << width << "x" << height
             << ", scale=" << scale << ", vr_mode=" << (vr_mode_ ? "1" : "0") << ")\n";
 }
 
-void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
+void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
+{
   CEF_REQUIRE_UI_THREAD();
   browser_ = browser;
   std::cout << "[Client] Browser created successfully! ID: " << browser->GetIdentifier() << "\n";
-  if (frame_rate_ > 0) {
+  if (frame_rate_ > 0)
+  {
     browser->GetHost()->SetWindowlessFrameRate(frame_rate_);
     std::cout << "[Client] Windowless frame rate set to " << frame_rate_ << " FPS\n";
   }
-  
+
   // Force an invalidation to trigger paint events
   browser->GetHost()->Invalidate(PET_VIEW);
   std::cout << "[Client] Forced browser invalidation to trigger paint\n";
 
   // Optional: minimal V8 ping to validate page JS runs without render handler
   CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
-  if (cmd.get() && cmd->HasSwitch("v8-ping")) {
-    int ms = std::max(100, atoi(cmd->GetSwitchValue("v8-ping").ToString().c_str()));
+  if (cmd.get() && cmd->HasSwitch("v8-ping"))
+  {
+    int ms = (std::max)(100, atoi(cmd->GetSwitchValue("v8-ping").ToString().c_str()));
     v8_ping_enabled_ = true;
     v8_ping_ms_ = ms;
     std::cout << "[Client] V8 ping enabled (interval=" << v8_ping_ms_ << " ms)\n";
-    class PingTask : public CefTask {
-     public:
+    class PingTask : public CefTask
+    {
+    public:
       PingTask(CefRefPtr<OffscreenClient> c, int ms) : client_(c), ms_(ms) {}
-      void Execute() override {
+      void Execute() override
+      {
         CEF_REQUIRE_UI_THREAD();
-        if (!client_.get()) return;
+        if (!client_.get())
+          return;
         auto br = client_->GetBrowser();
-        if (!br.get()) return;
+        if (!br.get())
+          return;
         auto frame = br->GetMainFrame();
-        if (frame.get()) {
+        if (frame.get())
+        {
           frame->ExecuteJavaScript(R"(window.__cefPingCount=(window.__cefPingCount||0)+1; console.log('[cef-ping]', window.__cefPingCount);)", "", 0);
         }
         // Re-schedule if still enabled
         CefPostDelayedTask(TID_UI, new PingTask(client_, ms_), ms_);
       }
-     private:
+
+    private:
       CefRefPtr<OffscreenClient> client_;
       int ms_;
       IMPLEMENT_REFCOUNTING(PingTask);
@@ -79,58 +89,75 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     CefPostDelayedTask(TID_UI, new PingTask(this, v8_ping_ms_), v8_ping_ms_);
   }
 
-
-
   // Real OpenVR pose -> page via iwerBridge.applyPose (browser-side injection)
   // Enabled with --iwer-apply-pose[=ms] (defaults to 11ms when vr_mode_)
   int pose_ms = 0;
   int stage_switch = 0;
-  if (cmd.get()) {
-    if (cmd->HasSwitch("v8-ext-stage")) {
-      stage_switch = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
+  if (cmd.get())
+  {
+    if (cmd->HasSwitch("v8-ext-stage"))
+    {
+      stage_switch = (std::max)(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
     }
-    if (cmd->HasSwitch("iwer-apply-pose")) {
-      pose_ms = std::max(5, atoi(cmd->GetSwitchValue("iwer-apply-pose").ToString().c_str()));
-      if (pose_ms <= 0) pose_ms = 11;
-    } else if (vr_mode_ && (cmd->HasSwitch("enable-iwer-bridge") || stage_switch >= 5)) {
+    if (cmd->HasSwitch("iwer-apply-pose"))
+    {
+      pose_ms = (std::max)(5, atoi(cmd->GetSwitchValue("iwer-apply-pose").ToString().c_str()));
+      if (pose_ms <= 0)
+        pose_ms = 11;
+    }
+    else if (vr_mode_ && (cmd->HasSwitch("enable-iwer-bridge") || stage_switch >= 5))
+    {
       pose_ms = (stage_switch >= 5) ? 8 : 11;
     }
   }
   const int desktop_interval_default = (stage_switch >= 5) ? 8 : 16;
-  if (pose_ms > 0 && !vr_mode_) {
+  if (pose_ms > 0 && !vr_mode_)
+  {
     std::cout << "[Client] Ignoring --iwer-apply-pose in desktop mode (no OpenVR data available)\n";
     pose_ms = 0;
   }
-  if (pose_ms > 0 && vr_mode_) {
-    class VrPoseTask : public CefTask {
-     public:
+  if (pose_ms > 0 && vr_mode_)
+  {
+    class VrPoseTask : public CefTask
+    {
+    public:
       VrPoseTask(CefRefPtr<OffscreenClient> c, int ms) : client_(c), ms_(ms) {}
-      static void ToPosQuat(const vr::HmdMatrix34_t& m, float pos[3], float quat[4]) {
-        pos[0] = m.m[0][3]; pos[1] = m.m[1][3]; pos[2] = m.m[2][3];
+      static void ToPosQuat(const vr::HmdMatrix34_t &m, float pos[3], float quat[4])
+      {
+        pos[0] = m.m[0][3];
+        pos[1] = m.m[1][3];
+        pos[2] = m.m[2][3];
         // 3x3 rotation -> quaternion (row-major)
         float r00 = m.m[0][0], r01 = m.m[0][1], r02 = m.m[0][2];
         float r10 = m.m[1][0], r11 = m.m[1][1], r12 = m.m[1][2];
         float r20 = m.m[2][0], r21 = m.m[2][1], r22 = m.m[2][2];
         float trace = r00 + r11 + r22;
-        if (trace > 0.0f) {
+        if (trace > 0.0f)
+        {
           float S = sqrtf(trace + 1.0f) * 2.0f;
-          quat[3] = 0.25f * S; // w
+          quat[3] = 0.25f * S;       // w
           quat[0] = (r21 - r12) / S; // x
           quat[1] = (r02 - r20) / S; // y
           quat[2] = (r10 - r01) / S; // z
-        } else if ((r00 > r11) && (r00 > r22)) {
+        }
+        else if ((r00 > r11) && (r00 > r22))
+        {
           float S = sqrtf(1.0f + r00 - r11 - r22) * 2.0f;
           quat[3] = (r21 - r12) / S;
           quat[0] = 0.25f * S;
           quat[1] = (r01 + r10) / S;
           quat[2] = (r02 + r20) / S;
-        } else if (r11 > r22) {
+        }
+        else if (r11 > r22)
+        {
           float S = sqrtf(1.0f + r11 - r00 - r22) * 2.0f;
           quat[3] = (r02 - r20) / S;
           quat[0] = (r01 + r10) / S;
           quat[1] = 0.25f * S;
           quat[2] = (r12 + r21) / S;
-        } else {
+        }
+        else
+        {
           float S = sqrtf(1.0f + r22 - r00 - r11) * 2.0f;
           quat[3] = (r10 - r01) / S;
           quat[0] = (r02 + r20) / S;
@@ -138,48 +165,65 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
           quat[2] = 0.25f * S;
         }
       }
-      void Execute() override {
+      void Execute() override
+      {
         CEF_REQUIRE_UI_THREAD();
-        if (!client_.get()) return;
+        if (!client_.get())
+          return;
         auto br = client_->GetBrowser();
-        if (!br.get()) return;
+        if (!br.get())
+          return;
         auto frame = br->GetMainFrame();
-        if (!frame.get()) return;
-        if (!vr::VRSystem()) { CefPostDelayedTask(TID_UI, this, ms_); return; }
+        if (!frame.get())
+          return;
+        if (!vr::VRSystem())
+        {
+          CefPostDelayedTask(TID_UI, this, ms_);
+          return;
+        }
         vr::TrackedDevicePose_t poses[vr::k_unMaxTrackedDeviceCount] = {};
         vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, 0, poses, vr::k_unMaxTrackedDeviceCount);
-        float hPos[3]={0}, hQuat[4]={0,0,0,1};
-        float lPos[3]={0}, lQuat[4]={0,0,0,1};
-        float rPos[3]={0}, rQuat[4]={0,0,0,1};
+        float hPos[3] = {0}, hQuat[4] = {0, 0, 0, 1};
+        float lPos[3] = {0}, lQuat[4] = {0, 0, 0, 1};
+        float rPos[3] = {0}, rQuat[4] = {0, 0, 0, 1};
         // HMD
-        if (poses[vr::k_unTrackedDeviceIndex_Hmd].bPoseIsValid) {
+        if (poses[vr::k_unTrackedDeviceIndex_Hmd].bPoseIsValid)
+        {
           ToPosQuat(poses[vr::k_unTrackedDeviceIndex_Hmd].mDeviceToAbsoluteTracking, hPos, hQuat);
         }
         // Controllers
-        for (vr::TrackedDeviceIndex_t i=0;i<vr::k_unMaxTrackedDeviceCount;++i) {
-          if (!poses[i].bPoseIsValid) continue;
-          if (vr::VRSystem()->GetTrackedDeviceClass(i) != vr::TrackedDeviceClass_Controller) continue;
+        for (vr::TrackedDeviceIndex_t i = 0; i < vr::k_unMaxTrackedDeviceCount; ++i)
+        {
+          if (!poses[i].bPoseIsValid)
+            continue;
+          if (vr::VRSystem()->GetTrackedDeviceClass(i) != vr::TrackedDeviceClass_Controller)
+            continue;
           auto role = vr::VRSystem()->GetControllerRoleForTrackedDeviceIndex(i);
-          if (role == vr::TrackedControllerRole_LeftHand) {
+          if (role == vr::TrackedControllerRole_LeftHand)
+          {
             ToPosQuat(poses[i].mDeviceToAbsoluteTracking, lPos, lQuat);
-          } else if (role == vr::TrackedControllerRole_RightHand) {
+          }
+          else if (role == vr::TrackedControllerRole_RightHand)
+          {
             ToPosQuat(poses[i].mDeviceToAbsoluteTracking, rPos, rQuat);
           }
         }
         const bool sent = client_->SendPoseToRenderer(frame, hPos, hQuat, lPos, lQuat, rPos, rQuat);
-        if (!sent) {
+        if (!sent)
+        {
           // Fallback to direct JS injection when the native bridge is disabled.
           char js[1024];
           snprintf(js, sizeof(js),
-            "(function(){try{ if(window.iwerBridge&&typeof iwerBridge.applyPose==='function'){ iwerBridge.applyPose({hmd:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}, left:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}, right:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}}); } }catch(e){} })();",
-            hPos[0],hPos[1],hPos[2], hQuat[0],hQuat[1],hQuat[2],hQuat[3],
-            lPos[0],lPos[1],lPos[2], lQuat[0],lQuat[1],lQuat[2],lQuat[3],
-            rPos[0],rPos[1],rPos[2], rQuat[0],rQuat[1],rQuat[2],rQuat[3]);
+                   "(function(){try{ if(window.iwerBridge&&typeof iwerBridge.applyPose==='function'){ iwerBridge.applyPose({hmd:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}, left:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}, right:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}}); } }catch(e){} })();",
+                   hPos[0], hPos[1], hPos[2], hQuat[0], hQuat[1], hQuat[2], hQuat[3],
+                   lPos[0], lPos[1], lPos[2], lQuat[0], lQuat[1], lQuat[2], lQuat[3],
+                   rPos[0], rPos[1], rPos[2], rQuat[0], rQuat[1], rQuat[2], rQuat[3]);
           frame->ExecuteJavaScript(js, "", 0);
         }
         CefPostDelayedTask(TID_UI, this, ms_);
       }
-     private:
+
+    private:
       CefRefPtr<OffscreenClient> client_;
       int ms_;
       IMPLEMENT_REFCOUNTING(VrPoseTask);
@@ -188,8 +232,9 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   }
   const bool bridge_flag = cmd.get() && cmd->HasSwitch("enable-iwer-bridge");
   const bool stage5_bridge = stage_switch >= 5;
-  if (bridge_flag || stage5_bridge) {
-    const char* source = bridge_flag ? "--enable-iwer-bridge" : "--v8-ext-stage>=5";
+  if (bridge_flag || stage5_bridge)
+  {
+    const char *source = bridge_flag ? "--enable-iwer-bridge" : "--v8-ext-stage>=5";
     const int report_interval = vr_mode_ ? pose_ms : desktop_interval_default;
     std::cout << "[Client] IWER pose bridge enabled via " << source
               << " (" << (vr_mode_ ? "OpenVR" : "desktop synthetic")
@@ -197,23 +242,30 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   }
 
   // Desktop-mode synthetic pose: drive iwerBridge.applyPose via ExecuteJavaScript without renderer bridge.
-  if (!vr_mode_) {
+  if (!vr_mode_)
+  {
     std::cout << "[Client] Starting desktop dummy pose animation" << std::endl;
-    class DesktopPoseTask : public CefTask {
-     public:
+    class DesktopPoseTask : public CefTask
+    {
+    public:
       DesktopPoseTask(CefRefPtr<OffscreenClient> c, int interval_ms)
           : client_(c), interval_ms_(interval_ms), tick_(0) {}
-      void Execute() override {
+      void Execute() override
+      {
         CEF_REQUIRE_UI_THREAD();
-        if (!client_.get()) return;
+        if (!client_.get())
+          return;
         auto br = client_->GetBrowser();
-        if (!br.get()) return;
-        if (!br->HasDocument()) {
+        if (!br.get())
+          return;
+        if (!br->HasDocument())
+        {
           CefPostDelayedTask(TID_UI, this, interval_ms_);
           return;
         }
         auto frame = br->GetMainFrame();
-        if (!frame.get()) {
+        if (!frame.get())
+        {
           CefPostDelayedTask(TID_UI, this, interval_ms_);
           return;
         }
@@ -247,43 +299,45 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
         float rightQuat[4] = {0.0f, 0.0f, static_cast<float>(std::sin(right_half)), static_cast<float>(std::cos(right_half))};
 
         const bool sent = client_->SendPoseToRenderer(frame, hPos, hQuat, leftPos, leftQuat, rightPos, rightQuat);
-        if (!sent) {
+        if (!sent)
+        {
           char js[2048];
           std::snprintf(js, sizeof(js),
-            "(function(){\n"
-            "  try {\n"
-            "    var state = {\n"
-            "      hmd:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]},\n"
-            "      left:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]},\n"
-            "      right:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}\n"
-            "    };\n"
-            "    var g = (typeof window !== 'undefined') ? window : this;\n"
-            "    var bridge = g && g.iwerBridge;\n"
-            "    var apply = bridge && bridge.applyPose;\n"
-            "    if (apply) {\n"
-            "      var ok = apply(state);\n"
-            "      g.__desktopPoseCount = (g.__desktopPoseCount || 0) + 1;\n"
-            "      if (g.__desktopPoseCount === 1 || (g.__desktopPoseCount %% 120) === 0) {\n"
-            "        try { console.log('[desktop-pose] ok=', ok, 'pos=', state.hmd.pos); } catch(e){}\n"
-            "      }\n"
-            "    } else {\n"
-            "      g.__desktopPoseWarn = (g.__desktopPoseWarn || 0) + 1;\n"
-            "      if (g.__desktopPoseWarn === 1 || (g.__desktopPoseWarn %% 60) === 0) {\n"
-            "        try { console.warn('[desktop-pose] iwerBridge.applyPose missing'); } catch(e){}\n"
-            "      }\n"
-            "    }\n"
-            "  } catch(e) {\n"
-            "    try { console.error('[desktop-pose] error', e); } catch(_e){}\n"
-            "  }\n"
-            "})();",
-            x, y, z, quat_x, quat_y, quat_z, quat_w,
-            left_offset, hand_y, hand_z, std::sin(left_half), 0.0, 0.0, std::cos(left_half),
-            right_offset, hand_y, hand_z, 0.0, 0.0, std::sin(right_half), std::cos(right_half));
+                        "(function(){\n"
+                        "  try {\n"
+                        "    var state = {\n"
+                        "      hmd:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]},\n"
+                        "      left:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]},\n"
+                        "      right:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}\n"
+                        "    };\n"
+                        "    var g = (typeof window !== 'undefined') ? window : this;\n"
+                        "    var bridge = g && g.iwerBridge;\n"
+                        "    var apply = bridge && bridge.applyPose;\n"
+                        "    if (apply) {\n"
+                        "      var ok = apply(state);\n"
+                        "      g.__desktopPoseCount = (g.__desktopPoseCount || 0) + 1;\n"
+                        "      if (g.__desktopPoseCount === 1 || (g.__desktopPoseCount %% 120) === 0) {\n"
+                        "        try { console.log('[desktop-pose] ok=', ok, 'pos=', state.hmd.pos); } catch(e){}\n"
+                        "      }\n"
+                        "    } else {\n"
+                        "      g.__desktopPoseWarn = (g.__desktopPoseWarn || 0) + 1;\n"
+                        "      if (g.__desktopPoseWarn === 1 || (g.__desktopPoseWarn %% 60) === 0) {\n"
+                        "        try { console.warn('[desktop-pose] iwerBridge.applyPose missing'); } catch(e){}\n"
+                        "      }\n"
+                        "    }\n"
+                        "  } catch(e) {\n"
+                        "    try { console.error('[desktop-pose] error', e); } catch(_e){}\n"
+                        "  }\n"
+                        "})();",
+                        x, y, z, quat_x, quat_y, quat_z, quat_w,
+                        left_offset, hand_y, hand_z, std::sin(left_half), 0.0, 0.0, std::cos(left_half),
+                        right_offset, hand_y, hand_z, 0.0, 0.0, std::sin(right_half), std::cos(right_half));
           frame->ExecuteJavaScript(js, "", 0);
         }
         CefPostDelayedTask(TID_UI, this, interval_ms_);
       }
-     private:
+
+    private:
       CefRefPtr<OffscreenClient> client_;
       int interval_ms_ = 16;
       int tick_;
@@ -293,27 +347,32 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   }
 }
 
-void OffscreenClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
+void OffscreenClient::OnBeforeClose(CefRefPtr<CefBrowser> browser)
+{
   CEF_REQUIRE_UI_THREAD();
   std::cout << "[Client] Browser closing... ID: " << browser->GetIdentifier() << "\n";
   browser_ = nullptr;
   // Signal that the browser is closed - this helps with shutdown
-  if (host_window_) {
+  if (host_window_)
+  {
     PostMessage(host_window_, WM_DESTROY, 0, 0);
   }
   std::cout << "[Client] Browser closed\n";
 }
 
-void OffscreenClient::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) {
+void OffscreenClient::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect &rect)
+{
   rect = CefRect(0, 0, width_, height_);
   static bool logged = false;
-  if (!logged) {
+  if (!logged)
+  {
     std::cout << "[Client] GetViewRect called: " << width_ << "x" << height_ << "\n";
     logged = true;
   }
 }
 
-bool OffscreenClient::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo& screen_info) {
+bool OffscreenClient::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo &screen_info)
+{
   screen_info.device_scale_factor = scale_;
   screen_info.depth = 24;
   screen_info.depth_per_component = 8;
@@ -321,7 +380,8 @@ bool OffscreenClient::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo
   screen_info.rect = CefRect(0, 0, width_, height_);
   screen_info.available_rect = screen_info.rect;
   static bool logged = false;
-  if (!logged) {
+  if (!logged)
+  {
     std::cout << "[Client] GetScreenInfo called: scale=" << scale_ << ", depth=24\n";
     logged = true;
   }
@@ -330,11 +390,13 @@ bool OffscreenClient::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo
 
 void OffscreenClient::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
                                          PaintElementType type,
-                                         const RectList& dirty_rects,
-                                         const CefAcceleratedPaintInfo& info) {
+                                         const RectList &dirty_rects,
+                                         const CefAcceleratedPaintInfo &info)
+{
   CEF_REQUIRE_UI_THREAD();
-  if (type != PET_VIEW) return;
-  
+  if (type != PET_VIEW)
+    return;
+
   static int paint_count = 0;
   paint_count++;
   static auto first_paint_ts = std::chrono::steady_clock::now();
@@ -345,22 +407,26 @@ void OffscreenClient::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
   auto now = std::chrono::steady_clock::now();
   double delta_s = std::chrono::duration<double>(now - last_paint_ts).count();
   last_paint_ts = now;
-  if (delta_s > 0.0) {
+  if (delta_s > 0.0)
+  {
     double delta_ms = delta_s * 1000.0;
-    if (delta_ms > worst_frame_ms) {
+    if (delta_ms > worst_frame_ms)
+    {
       worst_frame_ms = delta_ms;
     }
   }
-  
-  if (paint_count <= 10 || paint_count % 60 == 0) {
-    std::cout << "[Client] OnAcceleratedPaint #" << paint_count << " - Handle: " << info.shared_texture_handle 
+
+  if (paint_count <= 10 || paint_count % 60 == 0)
+  {
+    std::cout << "[Client] OnAcceleratedPaint #" << paint_count << " - Handle: " << info.shared_texture_handle
               << ", Size: " << width_ << "x" << height_ << ", Format: " << info.format << "\n";
     std::cout << "[Client] Dirty rects count: " << dirty_rects.size() << "\n";
   }
 
   const bool interval_report = (paint_count % 120) == 0;
   const bool time_report = (std::chrono::duration<double>(now - last_report_ts).count() >= 5.0);
-  if (paint_count == 1 || interval_report || time_report) {
+  if (paint_count == 1 || interval_report || time_report)
+  {
     double total_s = std::chrono::duration<double>(now - first_paint_ts).count();
     double avg_hz = total_s > 0.0 ? static_cast<double>(paint_count) / total_s : 0.0;
     double avg_ms = avg_hz > 0.0 ? 1000.0 / avg_hz : 0.0;
@@ -374,21 +440,25 @@ void OffscreenClient::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
               << std::defaultfloat << "\n";
     last_report_ts = now;
   }
-  
+
   got_accel_.store(true, std::memory_order_relaxed);
-  if (presenter_) {
+  if (presenter_)
+  {
     presenter_->PresentSharedHandle(info.shared_texture_handle, width_, height_);
-  } else {
+  }
+  else
+  {
     std::cerr << "[Client] ERROR: No presenter available for OnAcceleratedPaint!\n";
   }
 }
 
 void OffscreenClient::OnPaint(CefRefPtr<CefBrowser> browser,
                               PaintElementType type,
-                              const RectList& dirty_rects,
-                              const void* buffer,
+                              const RectList &dirty_rects,
+                              const void *buffer,
                               int width,
-                              int height) {
+                              int height)
+{
   // Fallback path when GPU is disabled; not implemented for brevity.
   static int software_paint_count = 0;
   software_paint_count++;
@@ -396,42 +466,54 @@ void OffscreenClient::OnPaint(CefRefPtr<CefBrowser> browser,
   std::cout << "[Client] WARNING: Software rendering fallback - GPU acceleration may not be working!\n";
 }
 
-void OffscreenClient::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) {
+void OffscreenClient::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString &title)
+{
   CEF_REQUIRE_UI_THREAD();
   std::cout << "[Client] Title changed: " << title.ToString() << "\n";
-  if (host_window_) SetWindowTextW(host_window_, std::wstring(title).c_str());
+  if (host_window_)
+    SetWindowTextW(host_window_, std::wstring(title).c_str());
 }
 
 bool OffscreenClient::SendPoseToRenderer(CefRefPtr<CefFrame> frame,
-                                         const float* hmd_pos,
-                                         const float* hmd_quat,
-                                         const float* left_pos,
-                                         const float* left_quat,
-                                         const float* right_pos,
-                                         const float* right_quat) {
+                                         const float *hmd_pos,
+                                         const float *hmd_quat,
+                                         const float *left_pos,
+                                         const float *left_quat,
+                                         const float *right_pos,
+                                         const float *right_quat)
+{
   CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
   bool allow_native = false;
   int stage_switch = 0;
-  if (cmd.get()) {
+  if (cmd.get())
+  {
     allow_native = cmd->HasSwitch("enable-iwer-bridge");
-    if (cmd->HasSwitch("v8-ext-stage")) {
-      stage_switch = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
-      if (stage_switch >= 5) allow_native = true;
+    if (cmd->HasSwitch("v8-ext-stage"))
+    {
+      stage_switch = (std::max)(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
+      if (stage_switch >= 5)
+        allow_native = true;
     }
   }
-  if (!allow_native) {
+  if (!allow_native)
+  {
     return false;
   }
-  if (!frame.get()) {
+  if (!frame.get())
+  {
     return false;
   }
 
   float payload[21] = {0};
-  auto copy3 = [](float* dst, const float* src) {
-    for (int i = 0; i < 3; ++i) dst[i] = src[i];
+  auto copy3 = [](float *dst, const float *src)
+  {
+    for (int i = 0; i < 3; ++i)
+      dst[i] = src[i];
   };
-  auto copy4 = [](float* dst, const float* src) {
-    for (int i = 0; i < 4; ++i) dst[i] = src[i];
+  auto copy4 = [](float *dst, const float *src)
+  {
+    for (int i = 0; i < 4; ++i)
+      dst[i] = src[i];
   };
   copy3(&payload[0], hmd_pos);
   copy4(&payload[3], hmd_quat);
@@ -449,18 +531,31 @@ bool OffscreenClient::SendPoseToRenderer(CefRefPtr<CefFrame> frame,
 
 bool OffscreenClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
                                        cef_log_severity_t level,
-                                       const CefString& message,
-                                       const CefString& source,
-                                       int line) {
+                                       const CefString &message,
+                                       const CefString &source,
+                                       int line)
+{
   CEF_REQUIRE_UI_THREAD();
-  const char* sev = "VERBOSE";
-  switch (level) {
-    case LOGSEVERITY_DEBUG: sev = "DEBUG"; break;
-    case LOGSEVERITY_INFO: sev = "INFO"; break;
-    case LOGSEVERITY_WARNING: sev = "WARN"; break;
-    case LOGSEVERITY_ERROR: sev = "ERROR"; break;
-    case LOGSEVERITY_FATAL: sev = "FATAL"; break;
-    default: break;
+  const char *sev = "VERBOSE";
+  switch (level)
+  {
+  case LOGSEVERITY_DEBUG:
+    sev = "DEBUG";
+    break;
+  case LOGSEVERITY_INFO:
+    sev = "INFO";
+    break;
+  case LOGSEVERITY_WARNING:
+    sev = "WARN";
+    break;
+  case LOGSEVERITY_ERROR:
+    sev = "ERROR";
+    break;
+  case LOGSEVERITY_FATAL:
+    sev = "FATAL";
+    break;
+  default:
+    break;
   }
   std::cout << "[Console][" << sev << "] " << message.ToString()
             << " (" << source.ToString() << ":" << line << ")\n";
@@ -472,11 +567,10 @@ bool OffscreenClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
                                      CefRefPtr<CefFrame> frame,
                                      CefRefPtr<CefRequest> request,
                                      bool user_gesture,
-                                     bool is_redirect) {
-  return false;  // allow
+                                     bool is_redirect)
+{
+  return false; // allow
 }
-
- 
 
 /* void OffscreenClient::OnLoadingStateChange(CefRefPtr<CefBrowser> browser,
                                            bool isLoading,
@@ -493,18 +587,21 @@ bool OffscreenClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
 bool OffscreenClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                                CefRefPtr<CefFrame> frame,
                                                CefProcessId source_process,
-                                               CefRefPtr<CefProcessMessage> message) {
+                                               CefRefPtr<CefProcessMessage> message)
+{
   CEF_REQUIRE_UI_THREAD();
   const std::string name = message->GetName();
-  if (name == "RB_LOG") {
+  if (name == "RB_LOG")
+  {
     auto args = message->GetArgumentList();
     std::string s = (args.get() && args->GetSize() > 0 && args->GetType(0) == VTYPE_STRING)
-                      ? args->GetString(0).ToString()
-                      : std::string();
+                        ? args->GetString(0).ToString()
+                        : std::string();
     std::cout << "[Renderer->Browser][RB_LOG] " << s << "\n";
     return true; // handled
   }
-  if (name == "RB_POSE") {
+  if (name == "RB_POSE")
+  {
     auto args = message->GetArgumentList();
     double x = (args.get() && args->GetSize() > 0 && args->GetType(0) == VTYPE_DOUBLE) ? args->GetDouble(0) : 0.0;
     double y = (args.get() && args->GetSize() > 1 && args->GetType(1) == VTYPE_DOUBLE) ? args->GetDouble(1) : 0.0;
@@ -515,21 +612,23 @@ bool OffscreenClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
   return false;
 }
 
- 
-
 void OffscreenClient::OnLoadEnd(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
-                                int httpStatusCode) {
+                                int httpStatusCode)
+{
   CEF_REQUIRE_UI_THREAD();
-  if (!frame.get() || !frame->IsMain()) return;
+  if (!frame.get() || !frame->IsMain())
+    return;
   // Use page-side injection to define a simple bridge when stage>=2 to avoid render-process fragility.
   CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
   int stage = 0;
-  if (cmd.get() && cmd->HasSwitch("v8-ext-stage")) {
-    stage = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
+  if (cmd.get() && cmd->HasSwitch("v8-ext-stage"))
+  {
+    stage = (std::max)(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
   }
-  if (stage >= 2) {
-    const char* js = R"JS((function(){
+  if (stage >= 2)
+  {
+    const char *js = R"JS((function(){
       try {
         var g = (typeof window !== 'undefined') ? window : this;
         if (!g.cefExt) g.cefExt = {};
