@@ -30,11 +30,21 @@
         },
       );
       xrDevice.installRuntime();
-      console.log("[index] IWER runtime installed");
-
-      // Configure stereo rendering
       xrDevice.stereoEnabled = true;
       xrDevice.ipd = 0.0068;
+      
+      window.cefExt.webxr.setDevice(xrDevice);
+
+      async function startXrSession() {
+        const session = await navigator.xr
+          .requestSession("immersive-ar", {
+            requiredFeatures: ["local-floor"],
+          });
+        console.log("[index] XR session started");
+
+        await renderer.xr.setSession(session);
+        renderer.setAnimationLoop(xrRenderLoop);
+      }
       //#endregion
 
       //#region Three.js Setup
@@ -71,27 +81,6 @@
       cube.position.z = -2;
       cube.position.y = 2;
       //#endregion
-
-      window.cefExt.webxr.setDevice(xrDevice);
-
-      async function startXrSession() {
-        const session = await navigator.xr
-          .requestSession("immersive-ar", {
-            requiredFeatures: ["local-floor"],
-          });
-        console.log("[index] XR session started");
-
-        session.addEventListener("end", () => {
-          console.log("[index] XR Session Ended");
-          renderer.setAnimationLoop(null);
-        });
-
-        const gl = renderer.getContext();
-
-        await renderer.xr.setSession(session);
-        renderer.setAnimationLoop(xrRenderLoop);
-        console.log("[index] Animation loop set");
-      }
 
       // Auto-start XR session after IWER installs the runtime
       Promise.resolve().then(() => startXrSession());
