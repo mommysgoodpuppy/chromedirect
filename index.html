@@ -34,10 +34,6 @@
             // Configure stereo rendering
             xrDevice.stereoEnabled = true;
             xrDevice.ipd = 0.0068;
-            console.log(
-                "[index] XRDevice config set stereoEnabled, ipd=",
-                xrDevice.ipd,
-            );
 
             // Three.js setup
             const scene = new THREE.Scene();
@@ -45,29 +41,13 @@
                 antialias: true,
                 alpha: true,
             });
-            // Improve perceived AA by matching device pixel ratio (override with ?dpr=1)
-            const dprParam = new URLSearchParams(
-                location.search,
-            ).get("dpr");
-            const DPR = dprParam
-                ? Math.max(1, Math.min(4, parseFloat(dprParam)))
-                : window.devicePixelRatio || 1;
-            renderer.setPixelRatio(DPR);
-            renderer.setSize(
-                window.innerWidth,
-                window.innerHeight,
-            );
+
             renderer.xr.enabled = true;
             renderer.setClearColor(0x000000, 0);
             document.body.appendChild(renderer.domElement);
 
             // Create proper camera configuration
-            const camera = new THREE.PerspectiveCamera(
-                90, // FOV
-                window.innerWidth / window.innerHeight, // Aspect ratio
-                0.1, // Near plane (MUST be > 0)
-                1000, // Far plane
-            );
+            const camera = new THREE.PerspectiveCamera();
 
             // Add lighting
             const light = new THREE.DirectionalLight(
@@ -88,8 +68,6 @@
             cube.position.z = -2;
             cube.position.y = 2;
 
-            // XR Session handling (auto-start capable via IWER polyfill)
-            const params = new URLSearchParams(location.search);
             let webxrBound = false;
             let webxrRetryTimer = null;
 
@@ -275,19 +253,6 @@
             // Auto-start XR session after IWER installs the runtime
             Promise.resolve().then(() => startXrSession());
 
-            // Handle window resize
-            window.addEventListener("resize", () => {
-                camera.aspect = window.innerWidth /
-                    window.innerHeight;
-                camera.updateProjectionMatrix();
-                renderer.setSize(
-                    window.innerWidth,
-                    window.innerHeight,
-                );
-            });
-
-            // Initial camera position
-            camera.position.set(0, 1.6, 0);
             renderer.render(scene, camera);
         </script>
     </body>
