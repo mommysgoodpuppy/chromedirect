@@ -112,27 +112,6 @@ public:
         command_line->AppendSwitch("disable-frame-rate-limit");
       if (!command_line->HasSwitch("enable-begin-frame-scheduling"))
         command_line->AppendSwitch("enable-begin-frame-scheduling");
-
-      if (gl->HasSwitch("v8-ext-stage") && !command_line->HasSwitch("v8-ext-stage"))
-      {
-        command_line->AppendSwitchWithValue("v8-ext-stage", gl->GetSwitchValue("v8-ext-stage"));
-      }
-      if (gl->HasSwitch("disable-iwer-extension") && !command_line->HasSwitch("disable-iwer-extension"))
-      {
-        command_line->AppendSwitch("disable-iwer-extension");
-      }
-      if (gl->HasSwitch("v8-ping") && !command_line->HasSwitch("v8-ping"))
-      {
-        command_line->AppendSwitchWithValue("v8-ping", gl->GetSwitchValue("v8-ping"));
-      }
-      if (gl->HasSwitch("v8-post-vr") && !command_line->HasSwitch("v8-post-vr"))
-      {
-        command_line->AppendSwitchWithValue("v8-post-vr", gl->GetSwitchValue("v8-post-vr"));
-      }
-      if (gl->HasSwitch("enable-iwer-bridge") && !command_line->HasSwitch("enable-iwer-bridge"))
-      {
-        command_line->AppendSwitch("enable-iwer-bridge");
-      }
     }
   }
   IMPLEMENT_REFCOUNTING(SimpleBrowserHandler);
@@ -144,26 +123,15 @@ CefRefPtr<CefBrowserProcessHandler> SimpleApp::GetBrowserProcessHandler()
   static CefRefPtr<SimpleBrowserHandler> s_handler = new SimpleBrowserHandler();
   return s_handler;
 }
-// Forward declare handler singletons and select via flags at runtime.
+// Forward declare handler singleton
 namespace
 {
-  CefRefPtr<CefRenderProcessHandler> g_minimal_handler; // created below
-  CefRefPtr<CefRenderProcessHandler> g_iwer_handler;    // RendererBridge
+  CefRefPtr<CefRenderProcessHandler> g_minimal_handler; // MinimalRenderHandler created below
 }
 CefRefPtr<CefRenderProcessHandler> SimpleApp::GetRenderProcessHandler()
 {
-  CefRefPtr<CefCommandLine> gl = CefCommandLine::GetGlobalCommandLine();
-  if (gl.get() && gl->HasSwitch("enable-iwer-bridge"))
-  {
-    if (!g_iwer_handler.get())
-      g_iwer_handler = new RendererBridge();
-    return g_iwer_handler;
-  }
-  if (gl.get() && gl->HasSwitch("v8-ext-stage"))
-  {
-    return g_minimal_handler; // initialized later
-  }
-  return nullptr;
+  // Always use the MinimalRenderHandler which provides the IWER bridge
+  return g_minimal_handler; // initialized later in wWinMain
 }
 
 // Signal handler for Ctrl+C
@@ -254,89 +222,73 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   class MinimalRenderHandler : public CefRenderProcessHandler
   {
   public:
-    MinimalRenderHandler() : stage_(0), ext_registered_(false), stage5_registered_(false) {}
+    MinimalRenderHandler() {}
     void OnWebKitInitialized() override
     {
-      CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
-      stage_ = 0;
-      if (cmd.get() && cmd->HasSwitch("v8-ext-stage"))
+      // Register the V8 extension that provides cefExt.stage5.setDevice/clearDevice
+      class Stage5Handler : public CefV8Handler
       {
-        stage_ = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
-      }
-
-      if (true)
-      {
-        class Stage5Handler : public CefV8Handler
+      public:
+        explicit Stage5Handler(MinimalRenderHandler *owner) : owner_(owner) {}
+        bool Execute(const CefString &name,
+                     CefRefPtr<CefV8Value> /*object*/,
+                     const CefV8ValueList &arguments,
+                     CefRefPtr<CefV8Value> &retval,
+                     CefString & /*exception*/) override
         {
-        public:
-          explicit Stage5Handler(MinimalRenderHandler *owner) : owner_(owner) {}
-          bool Execute(const CefString &name,
-                       CefRefPtr<CefV8Value> /*object*/,
-                       const CefV8ValueList &arguments,
-                       CefRefPtr<CefV8Value> &retval,
-                       CefString & /*exception*/) override
-          {
-            if (!owner_)
-              return false;
-            if (name == "__stage5SetDevice")
-            {
-              CefRefPtr<CefV8Context> ctx = CefV8Context::GetCurrentContext();
-              bool ok = false;
-              if (arguments.size() > 0 && arguments[0].get() && arguments[0]->IsObject())
-              {
-                ok = owner_->BindDevice(ctx, arguments[0]);
-              }
-              retval = CefV8Value::CreateBool(ok);
-              return true;
-            }
-            if (name == "__stage5ClearDevice")
-            {
-              owner_->ClearDevice();
-              retval = CefV8Value::CreateBool(true);
-              return true;
-            }
+          if (!owner_)
             return false;
+          if (name == "__stage5SetDevice")
+          {
+            CefRefPtr<CefV8Context> ctx = CefV8Context::GetCurrentContext();
+            bool ok = false;
+            if (arguments.size() > 0 && arguments[0].get() && arguments[0]->IsObject())
+            {
+              ok = owner_->BindDevice(ctx, arguments[0]);
+            }
+            retval = CefV8Value::CreateBool(ok);
+            return true;
           }
+          if (name == "__stage5ClearDevice")
+          {
+            owner_->ClearDevice();
+            retval = CefV8Value::CreateBool(true);
+            return true;
+          }
+          return false;
+        }
 
-        private:
-          MinimalRenderHandler *owner_;
-          IMPLEMENT_REFCOUNTING(Stage5Handler);
-        };
+      private:
+        MinimalRenderHandler *owner_;
+        IMPLEMENT_REFCOUNTING(Stage5Handler);
+      };
 
-        const char *kStage5JS =
-            "if (!cefExt) var cefExt = {};\n"
-            "if (!cefExt.stage5) cefExt.stage5 = {};\n"
-            "native function __stage5SetDevice();\n"
-            "native function __stage5ClearDevice();\n"
-            "cefExt.stage5.setDevice = function(dev){ return __stage5SetDevice(dev); };\n"
-            "cefExt.stage5.clearDevice = function(){ return __stage5ClearDevice(); };\n";
-        CefRegisterExtension("v8/cef_stage5", kStage5JS, new Stage5Handler(this));
-        stage5_registered_ = true;
-      }
+      const char *kStage5JS =
+          "if (!cefExt) var cefExt = {};\n"
+          "if (!cefExt.stage5) cefExt.stage5 = {};\n"
+          "native function __stage5SetDevice();\n"
+          "native function __stage5ClearDevice();\n"
+          "cefExt.stage5.setDevice = function(dev){ return __stage5SetDevice(dev); };\n"
+          "cefExt.stage5.clearDevice = function(){ return __stage5ClearDevice(); };\n";
+      CefRegisterExtension("v8/cef_stage5", kStage5JS, new Stage5Handler(this));
     }
     void OnContextCreated(CefRefPtr<CefBrowser> browser,
                           CefRefPtr<CefFrame> frame,
                           CefRefPtr<CefV8Context> context) override
     {
-      // Post a simple log to the browser process to prove renderer is alive (only if staged).
+      // Post a simple log to the browser process
       if (!frame.get())
         return;
 
-      int stage = ResolveStage();
-      if (true)
-      {
-        CefRefPtr<CefProcessMessage> pm0 = CefProcessMessage::Create("RB_LOG");
-        pm0->GetArgumentList()->SetString(0, "ext-stage1: OnContextCreated");
-        frame->SendProcessMessage(PID_BROWSER, pm0);
+      CefRefPtr<CefProcessMessage> pm0 = CefProcessMessage::Create("RB_LOG");
+      pm0->GetArgumentList()->SetString(0, "MinimalRenderHandler: OnContextCreated");
+      frame->SendProcessMessage(PID_BROWSER, pm0);
 
-        CefRefPtr<CefProcessMessage> pm = CefProcessMessage::Create("RB_LOG");
-        std::string info = std::string("ext-stage info: stage=") + std::to_string(stage) +
-                           " main=" + (frame->IsMain() ? "1" : "0") +
-                           " ext_registered=" + (ext_registered_ ? "1" : "0") +
-                           " stage5_pose=" + (has_pose_ ? "1" : "0");
-        pm->GetArgumentList()->SetString(0, info);
-        frame->SendProcessMessage(PID_BROWSER, pm);
-      }
+      CefRefPtr<CefProcessMessage> pm = CefProcessMessage::Create("RB_LOG");
+      std::string info = std::string("MinimalRenderHandler info: main=") + (frame->IsMain() ? "1" : "0") +
+                         " has_pose=" + (has_pose_ ? "1" : "0");
+      pm->GetArgumentList()->SetString(0, info);
+      frame->SendProcessMessage(PID_BROWSER, pm);
     }
 
     void OnContextReleased(CefRefPtr<CefBrowser> browser,
@@ -357,8 +309,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       if (!message.get())
         return false;
       if (message->GetName() != "VR_STATE")
-        return false;
-      if (ResolveStage() < 5)
         return false;
 
       auto args = message->GetArgumentList();
@@ -690,21 +640,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       }
     }
 
-    int ResolveStage()
-    {
-      if (stage_ > 0)
-        return stage_;
-      CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
-      if (cmd.get() && cmd->HasSwitch("v8-ext-stage"))
-      {
-        stage_ = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
-      }
-      return stage_;
-    }
-
-    int stage_;
-    bool ext_registered_;
-    bool stage5_registered_;
     PoseSample last_pose_{};
     bool has_pose_ = false;
     uint64_t pose_sequence_ = 0;
