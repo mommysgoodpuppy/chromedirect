@@ -66,6 +66,8 @@ set(APP_SOURCES
   src/OpenVRPresenter.cpp
   src/RendererBridge.h
   src/RendererBridge.cpp
+  src/MinimalRenderHandler.h
+  src/MinimalRenderHandler.cpp
 )
 
 # Create the executable target
