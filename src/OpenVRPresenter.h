@@ -78,6 +78,7 @@ private:
   // Reusable copy texture when the source is MSAA or not SRV-capable to avoid per-frame CreateTexture2D churn.
   Microsoft::WRL::ComPtr<ID3D11Texture2D> copy_tex_;
   D3D11_TEXTURE2D_DESC copy_desc_ = {};
+  Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> copy_srv_;
 
   // Shader pipeline for rendering into shared_legacy_tex_
   float fov_half_radians_ = 0.78539816339f; // ~45 deg

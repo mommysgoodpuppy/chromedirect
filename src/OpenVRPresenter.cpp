@@ -562,6 +562,7 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     if (needNewCopy)
     {
       copy_tex_.Reset();
+      copy_srv_.Reset();
       ZeroMemory(&copy_desc_, sizeof(copy_desc_));
       copy_desc_.Width = srcDesc.Width;
       copy_desc_.Height = srcDesc.Height;
@@ -580,6 +581,15 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
         std::cerr << "[OpenVR] ERROR: Failed to (re)create copy texture, hr=0x" << std::hex << crt << std::dec << "\n";
         // Fall back to submitting the shared texture directly
         submitTex = sharedTex;
+      }
+      else
+      {
+        HRESULT srvHr = device_->CreateShaderResourceView(copy_tex_.Get(), nullptr, copy_srv_.GetAddressOf());
+        if (FAILED(srvHr))
+        {
+          std::cerr << "[OpenVR] ERROR: Failed to create SRV for copy texture, hr=0x" << std::hex << srvHr << std::dec << "\n";
+          copy_srv_.Reset();
+        }
       }
     }
     if (copy_tex_)
@@ -615,10 +625,27 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
   }
 
   // Shader path: render SBS -> stereo panorama into shared_legacy_tex_
-  // Create SRV for submitTex (let D3D infer view desc)
-  ComPtr<ID3D11ShaderResourceView> srv;
-  HRESULT hrs = device_->CreateShaderResourceView(submitTex.Get(), nullptr, srv.GetAddressOf());
-  if (SUCCEEDED(hrs))
+  // Create or reuse SRV for submitTex
+  ComPtr<ID3D11ShaderResourceView> transientSrv;
+  ID3D11ShaderResourceView *srvRaw = nullptr;
+  if (submitTex.Get() == copy_tex_.Get() && copy_srv_)
+  {
+    srvRaw = copy_srv_.Get();
+  }
+  else
+  {
+    HRESULT hrs = device_->CreateShaderResourceView(submitTex.Get(), nullptr, transientSrv.GetAddressOf());
+    if (SUCCEEDED(hrs))
+    {
+      srvRaw = transientSrv.Get();
+    }
+    else
+    {
+      std::cerr << "[OpenVR] ERROR: Create SRV failed, hr=0x" << std::hex << hrs << std::dec << "\n";
+    }
+  }
+
+  if (srvRaw)
   {
     context_->OMSetRenderTargets(1, shared_rtv_.GetAddressOf(), nullptr);
     context_->RSSetViewports(1, &viewport_);
@@ -630,7 +657,7 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     context_->VSSetShader(vs_.Get(), nullptr, 0);
     context_->PSSetShader(ps_.Get(), nullptr, 0);
     context_->PSSetSamplers(0, 1, sampler_.GetAddressOf());
-    context_->PSSetShaderResources(0, 1, srv.GetAddressOf());
+  context_->PSSetShaderResources(0, 1, &srvRaw);
 
     // Update constants (supply a yaw-only look rotation from HMD if available)
     D3D11_MAPPED_SUBRESOURCE map = {};
@@ -715,10 +742,14 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
         std::cout << "[OpenVR] Texture submitted to overlay successfully (DXGI shared handle)\n";
       }
     }
-  }
-  else
-  {
-    std::cerr << "[OpenVR] ERROR: Create SRV failed, hr=0x" << std::hex << hrs << std::dec << "\n";
+
+    // Unbind resources to avoid accumulating references on the device context
+    ID3D11ShaderResourceView *nullSrv[1] = {nullptr};
+    context_->PSSetShaderResources(0, 1, nullSrv);
+    ID3D11SamplerState *nullSampler[1] = {nullptr};
+    context_->PSSetSamplers(0, 1, nullSampler);
+    ID3D11RenderTargetView *nullRtv[1] = {nullptr};
+    context_->OMSetRenderTargets(1, nullRtv, nullptr);
   }
 
   // Visibility check
@@ -790,6 +821,7 @@ void OpenVRPresenter::Cleanup()
   ZeroMemory(&shared_legacy_desc_, sizeof(shared_legacy_desc_));
   last_submitted_texture_.Reset();
   copy_tex_.Reset();
+  copy_srv_.Reset();
   ZeroMemory(&copy_desc_, sizeof(copy_desc_));
 
   context_.Reset();
