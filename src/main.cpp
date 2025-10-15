@@ -36,11 +36,13 @@ static CefRefPtr<OffscreenClient> g_client;
 static HWND g_main_window = nullptr;
 
 // Console allocation for logging
-static void AllocateConsole() {
-  if (AllocConsole()) {
-    freopen_s((FILE**)stdout, "CONOUT$", "w", stdout);
-    freopen_s((FILE**)stderr, "CONOUT$", "w", stderr);
-    freopen_s((FILE**)stdin, "CONIN$", "r", stdin);
+static void AllocateConsole()
+{
+  if (AllocConsole())
+  {
+    freopen_s((FILE **)stdout, "CONOUT$", "w", stdout);
+    freopen_s((FILE **)stderr, "CONOUT$", "w", stderr);
+    freopen_s((FILE **)stdin, "CONIN$", "r", stdin);
     std::cout.clear();
     std::cerr.clear();
     std::cin.clear();
@@ -52,10 +54,12 @@ static void AllocateConsole() {
 }
 
 // App to configure CEF switches for all processes
-class SimpleApp : public CefApp {
- public:
-  void OnBeforeCommandLineProcessing(const CefString& process_type,
-                                     CefRefPtr<CefCommandLine> command_line) override {
+class SimpleApp : public CefApp
+{
+public:
+  void OnBeforeCommandLineProcessing(const CefString &process_type,
+                                     CefRefPtr<CefCommandLine> command_line) override
+  {
     // Ensure OSR and GPU via ANGLE D3D11 are enabled everywhere
     if (!command_line->HasSwitch("off-screen-rendering-enabled"))
       command_line->AppendSwitch("off-screen-rendering-enabled");
@@ -82,14 +86,17 @@ class SimpleApp : public CefApp {
   CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override;
 
   IMPLEMENT_REFCOUNTING(SimpleApp);
- };
+};
 
-class SimpleBrowserHandler : public CefBrowserProcessHandler {
- public:
-  void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> command_line) override {
+class SimpleBrowserHandler : public CefBrowserProcessHandler
+{
+public:
+  void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> command_line) override
+  {
     // Propagate testing/dev switches into child (renderer) processes so the render handler can see them.
     CefRefPtr<CefCommandLine> gl = CefCommandLine::GetGlobalCommandLine();
-    if (gl.get()) {
+    if (gl.get())
+    {
       // Ensure OSR/GPU flags also apply to child processes when a separate render app is used.
       if (!command_line->HasSwitch("off-screen-rendering-enabled"))
         command_line->AppendSwitch("off-screen-rendering-enabled");
@@ -106,19 +113,24 @@ class SimpleBrowserHandler : public CefBrowserProcessHandler {
       if (!command_line->HasSwitch("enable-begin-frame-scheduling"))
         command_line->AppendSwitch("enable-begin-frame-scheduling");
 
-      if (gl->HasSwitch("v8-ext-stage") && !command_line->HasSwitch("v8-ext-stage")) {
+      if (gl->HasSwitch("v8-ext-stage") && !command_line->HasSwitch("v8-ext-stage"))
+      {
         command_line->AppendSwitchWithValue("v8-ext-stage", gl->GetSwitchValue("v8-ext-stage"));
       }
-      if (gl->HasSwitch("disable-iwer-extension") && !command_line->HasSwitch("disable-iwer-extension")) {
+      if (gl->HasSwitch("disable-iwer-extension") && !command_line->HasSwitch("disable-iwer-extension"))
+      {
         command_line->AppendSwitch("disable-iwer-extension");
       }
-      if (gl->HasSwitch("v8-ping") && !command_line->HasSwitch("v8-ping")) {
+      if (gl->HasSwitch("v8-ping") && !command_line->HasSwitch("v8-ping"))
+      {
         command_line->AppendSwitchWithValue("v8-ping", gl->GetSwitchValue("v8-ping"));
       }
-      if (gl->HasSwitch("v8-post-vr") && !command_line->HasSwitch("v8-post-vr")) {
+      if (gl->HasSwitch("v8-post-vr") && !command_line->HasSwitch("v8-post-vr"))
+      {
         command_line->AppendSwitchWithValue("v8-post-vr", gl->GetSwitchValue("v8-post-vr"));
       }
-      if (gl->HasSwitch("enable-iwer-bridge") && !command_line->HasSwitch("enable-iwer-bridge")) {
+      if (gl->HasSwitch("enable-iwer-bridge") && !command_line->HasSwitch("enable-iwer-bridge"))
+      {
         command_line->AppendSwitch("enable-iwer-bridge");
       }
     }
@@ -127,81 +139,100 @@ class SimpleBrowserHandler : public CefBrowserProcessHandler {
 };
 
 // Return a static instance
-CefRefPtr<CefBrowserProcessHandler> SimpleApp::GetBrowserProcessHandler() {
+CefRefPtr<CefBrowserProcessHandler> SimpleApp::GetBrowserProcessHandler()
+{
   static CefRefPtr<SimpleBrowserHandler> s_handler = new SimpleBrowserHandler();
   return s_handler;
 }
 // Forward declare handler singletons and select via flags at runtime.
-namespace {
+namespace
+{
   CefRefPtr<CefRenderProcessHandler> g_minimal_handler; // created below
   CefRefPtr<CefRenderProcessHandler> g_iwer_handler;    // RendererBridge
 }
-CefRefPtr<CefRenderProcessHandler> SimpleApp::GetRenderProcessHandler() {
+CefRefPtr<CefRenderProcessHandler> SimpleApp::GetRenderProcessHandler()
+{
   CefRefPtr<CefCommandLine> gl = CefCommandLine::GetGlobalCommandLine();
-  if (gl.get() && gl->HasSwitch("enable-iwer-bridge")) {
-    if (!g_iwer_handler.get()) g_iwer_handler = new RendererBridge();
+  if (gl.get() && gl->HasSwitch("enable-iwer-bridge"))
+  {
+    if (!g_iwer_handler.get())
+      g_iwer_handler = new RendererBridge();
     return g_iwer_handler;
   }
-  if (gl.get() && gl->HasSwitch("v8-ext-stage")) {
+  if (gl.get() && gl->HasSwitch("v8-ext-stage"))
+  {
     return g_minimal_handler; // initialized later
   }
   return nullptr;
 }
 
 // Signal handler for Ctrl+C
-static void SignalHandler(int signal) {
-  if (signal == SIGINT || signal == SIGTERM) {
+static void SignalHandler(int signal)
+{
+  if (signal == SIGINT || signal == SIGTERM)
+  {
     g_shutdown_requested.store(true);
-    if (g_main_window) {
+    if (g_main_window)
+    {
       PostMessage(g_main_window, WM_CLOSE, 0, 0);
     }
   }
 }
 
 // Console Ctrl handler for Windows
-static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
-  switch (dwCtrlType) {
-    case CTRL_C_EVENT:
-    case CTRL_BREAK_EVENT:
-    case CTRL_CLOSE_EVENT:
-    case CTRL_LOGOFF_EVENT:
-    case CTRL_SHUTDOWN_EVENT:
-      g_shutdown_requested.store(true);
-      if (g_main_window) {
-        PostMessage(g_main_window, WM_CLOSE, 0, 0);
-      }
-      return TRUE;
-    default:
-      return FALSE;
+static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType)
+{
+  switch (dwCtrlType)
+  {
+  case CTRL_C_EVENT:
+  case CTRL_BREAK_EVENT:
+  case CTRL_CLOSE_EVENT:
+  case CTRL_LOGOFF_EVENT:
+  case CTRL_SHUTDOWN_EVENT:
+    g_shutdown_requested.store(true);
+    if (g_main_window)
+    {
+      PostMessage(g_main_window, WM_CLOSE, 0, 0);
+    }
+    return TRUE;
+  default:
+    return FALSE;
   }
 }
 
 // Simple Win32 window to host our D3D11 swapchain
-static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
-  switch (message) {
-    case WM_SIZE: {
-      return 0;
+static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+  switch (message)
+  {
+  case WM_SIZE:
+  {
+    return 0;
+  }
+  case WM_CLOSE:
+  {
+    g_shutdown_requested.store(true);
+    // Close browser first
+    if (g_client && g_client->GetBrowser())
+    {
+      g_client->GetBrowser()->GetHost()->CloseBrowser(true);
     }
-    case WM_CLOSE: {
-      g_shutdown_requested.store(true);
-      // Close browser first
-      if (g_client && g_client->GetBrowser()) {
-        g_client->GetBrowser()->GetHost()->CloseBrowser(true);
-      }
-      return 0;
-    }
-    case WM_DESTROY: {
-      PostQuitMessage(0);
-      return 0;
-    }
+    return 0;
+  }
+  case WM_DESTROY:
+  {
+    PostQuitMessage(0);
+    return 0;
+  }
   }
   return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                       _In_opt_ HINSTANCE hPrevInstance,
-                      _In_ LPWSTR    lpCmdLine,
-                      _In_ int       nCmdShow) {
+                      _In_ LPWSTR lpCmdLine,
+                      _In_ int nCmdShow)
+{
   UNREFERENCED_PARAMETER(hPrevInstance);
   UNREFERENCED_PARAMETER(lpCmdLine);
 
@@ -210,9 +241,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 #if defined(CEF_USE_SANDBOX)
   CefScopedSandboxInfo scoped_sandbox;
-  void* sandbox_info = scoped_sandbox.sandbox_info();
+  void *sandbox_info = scoped_sandbox.sandbox_info();
 #else
-  void* sandbox_info = nullptr;
+  void *sandbox_info = nullptr;
 #endif
 
   // Optionally enable a minimal render-process handler for incremental V8 testing.
@@ -220,36 +251,46 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   CefRefPtr<CefCommandLine> pre_cmd = CefCommandLine::CreateCommandLine();
   pre_cmd->InitFromString(::GetCommandLineW());
 
-  class MinimalRenderHandler : public CefRenderProcessHandler {
-   public:
+  class MinimalRenderHandler : public CefRenderProcessHandler
+  {
+  public:
     MinimalRenderHandler() : stage_(0), ext_registered_(false), stage5_registered_(false) {}
-    void OnWebKitInitialized() override {
+    void OnWebKitInitialized() override
+    {
       CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
       stage_ = 0;
-      if (cmd.get() && cmd->HasSwitch("v8-ext-stage")) {
+      if (cmd.get() && cmd->HasSwitch("v8-ext-stage"))
+      {
         stage_ = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
       }
 
-      if (stage_ >= 5 && !stage5_registered_) {
-        class Stage5Handler : public CefV8Handler {
-         public:
-          explicit Stage5Handler(MinimalRenderHandler* owner) : owner_(owner) {}
-          bool Execute(const CefString& name,
+      if (true)
+      {
+        class Stage5Handler : public CefV8Handler
+        {
+        public:
+          explicit Stage5Handler(MinimalRenderHandler *owner) : owner_(owner) {}
+          bool Execute(const CefString &name,
                        CefRefPtr<CefV8Value> /*object*/,
-                       const CefV8ValueList& arguments,
-                       CefRefPtr<CefV8Value>& retval,
-                       CefString& /*exception*/) override {
-            if (!owner_) return false;
-            if (name == "__stage5SetDevice") {
+                       const CefV8ValueList &arguments,
+                       CefRefPtr<CefV8Value> &retval,
+                       CefString & /*exception*/) override
+          {
+            if (!owner_)
+              return false;
+            if (name == "__stage5SetDevice")
+            {
               CefRefPtr<CefV8Context> ctx = CefV8Context::GetCurrentContext();
               bool ok = false;
-              if (arguments.size() > 0 && arguments[0].get() && arguments[0]->IsObject()) {
+              if (arguments.size() > 0 && arguments[0].get() && arguments[0]->IsObject())
+              {
                 ok = owner_->BindDevice(ctx, arguments[0]);
               }
               retval = CefV8Value::CreateBool(ok);
               return true;
             }
-            if (name == "__stage5ClearDevice") {
+            if (name == "__stage5ClearDevice")
+            {
               owner_->ClearDevice();
               retval = CefV8Value::CreateBool(true);
               return true;
@@ -257,39 +298,42 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
             return false;
           }
 
-         private:
-          MinimalRenderHandler* owner_;
+        private:
+          MinimalRenderHandler *owner_;
           IMPLEMENT_REFCOUNTING(Stage5Handler);
         };
 
-        const char* kStage5JS =
-          "if (!cefExt) var cefExt = {};\n"
-          "if (!cefExt.stage5) cefExt.stage5 = {};\n"
-          "native function __stage5SetDevice();\n"
-          "native function __stage5ClearDevice();\n"
-          "cefExt.stage5.setDevice = function(dev){ return __stage5SetDevice(dev); };\n"
-          "cefExt.stage5.clearDevice = function(){ return __stage5ClearDevice(); };\n";
+        const char *kStage5JS =
+            "if (!cefExt) var cefExt = {};\n"
+            "if (!cefExt.stage5) cefExt.stage5 = {};\n"
+            "native function __stage5SetDevice();\n"
+            "native function __stage5ClearDevice();\n"
+            "cefExt.stage5.setDevice = function(dev){ return __stage5SetDevice(dev); };\n"
+            "cefExt.stage5.clearDevice = function(){ return __stage5ClearDevice(); };\n";
         CefRegisterExtension("v8/cef_stage5", kStage5JS, new Stage5Handler(this));
         stage5_registered_ = true;
       }
     }
     void OnContextCreated(CefRefPtr<CefBrowser> browser,
                           CefRefPtr<CefFrame> frame,
-                          CefRefPtr<CefV8Context> context) override {
+                          CefRefPtr<CefV8Context> context) override
+    {
       // Post a simple log to the browser process to prove renderer is alive (only if staged).
-      if (!frame.get()) return;
+      if (!frame.get())
+        return;
 
       int stage = ResolveStage();
-      if (stage > 0) {
+      if (true)
+      {
         CefRefPtr<CefProcessMessage> pm0 = CefProcessMessage::Create("RB_LOG");
         pm0->GetArgumentList()->SetString(0, "ext-stage1: OnContextCreated");
         frame->SendProcessMessage(PID_BROWSER, pm0);
 
         CefRefPtr<CefProcessMessage> pm = CefProcessMessage::Create("RB_LOG");
         std::string info = std::string("ext-stage info: stage=") + std::to_string(stage) +
-                           " main=" + (frame->IsMain()?"1":"0") +
-                           " ext_registered=" + (ext_registered_?"1":"0") +
-                           " stage5_pose=" + (has_pose_?"1":"0");
+                           " main=" + (frame->IsMain() ? "1" : "0") +
+                           " ext_registered=" + (ext_registered_ ? "1" : "0") +
+                           " stage5_pose=" + (has_pose_ ? "1" : "0");
         pm->GetArgumentList()->SetString(0, info);
         frame->SendProcessMessage(PID_BROWSER, pm);
       }
@@ -297,8 +341,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     void OnContextReleased(CefRefPtr<CefBrowser> browser,
                            CefRefPtr<CefFrame> frame,
-                           CefRefPtr<CefV8Context> context) override {
-      if (device_context_.get() && context.get() && context->IsSame(device_context_)) {
+                           CefRefPtr<CefV8Context> context) override
+    {
+      if (device_context_.get() && context.get() && context->IsSame(device_context_))
+      {
         ClearDevice();
       }
     }
@@ -306,34 +352,42 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
                                   CefProcessId source_process,
-                                  CefRefPtr<CefProcessMessage> message) override {
-      if (!message.get()) return false;
-      if (message->GetName() != "VR_STATE") return false;
-      if (ResolveStage() < 5) return false;
+                                  CefRefPtr<CefProcessMessage> message) override
+    {
+      if (!message.get())
+        return false;
+      if (message->GetName() != "VR_STATE")
+        return false;
+      if (ResolveStage() < 5)
+        return false;
 
       auto args = message->GetArgumentList();
-      if (!args.get() || args->GetSize() < 1 || args->GetType(0) != VTYPE_BINARY) return false;
+      if (!args.get() || args->GetSize() < 1 || args->GetType(0) != VTYPE_BINARY)
+        return false;
       CefRefPtr<CefBinaryValue> bin = args->GetBinary(0);
       size_t len = bin->GetSize();
-      if (len < sizeof(float) * (3 + 4) * 3) return false;
+      if (len < sizeof(float) * (3 + 4) * 3)
+        return false;
       std::vector<char> buf(len);
       bin->GetData(buf.data(), len, 0);
-      const float* pf = reinterpret_cast<const float*>(buf.data());
+      const float *pf = reinterpret_cast<const float *>(buf.data());
 
-      const float* hmd_pos = pf + 0;
-      const float* hmd_quat = pf + 3;
-      const float* left_pos = pf + 7;
-      const float* left_quat = pf + 10;
-      const float* right_pos = pf + 14;
-      const float* right_quat = pf + 17;
+      const float *hmd_pos = pf + 0;
+      const float *hmd_quat = pf + 3;
+      const float *left_pos = pf + 7;
+      const float *left_quat = pf + 10;
+      const float *right_pos = pf + 14;
+      const float *right_quat = pf + 17;
 
       pose_sequence_++;
-      for (int i = 0; i < 3; ++i) {
+      for (int i = 0; i < 3; ++i)
+      {
         last_pose_.hmd_pos[i] = static_cast<double>(hmd_pos[i]);
         last_pose_.left_pos[i] = static_cast<double>(left_pos[i]);
         last_pose_.right_pos[i] = static_cast<double>(right_pos[i]);
       }
-      for (int i = 0; i < 4; ++i) {
+      for (int i = 0; i < 4; ++i)
+      {
         last_pose_.hmd_quat[i] = static_cast<double>(hmd_quat[i]);
         last_pose_.left_quat[i] = static_cast<double>(left_quat[i]);
         last_pose_.right_quat[i] = static_cast<double>(right_quat[i]);
@@ -343,7 +397,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
       ApplyPoseToDevice();
 
-      if (pose_sequence_ == 1 || (pose_sequence_ % 120) == 0) {
+      if (pose_sequence_ == 1 || (pose_sequence_ % 120) == 0)
+      {
         std::cout << "[MinimalRenderHandler] Pose updated seq=" << pose_sequence_
                   << " hmd.pos=(" << last_pose_.hmd_pos[0] << ", "
                   << last_pose_.hmd_pos[1] << ", " << last_pose_.hmd_pos[2]
@@ -353,8 +408,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     }
 
     IMPLEMENT_REFCOUNTING(MinimalRenderHandler);
-   private:
-    struct ControllerBinding {
+
+  private:
+    struct ControllerBinding
+    {
       CefRefPtr<CefV8Value> value;
       CefRefPtr<CefV8Value> position;
       CefRefPtr<CefV8Value> position_set;
@@ -362,7 +419,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       CefRefPtr<CefV8Value> quaternion_set;
     };
 
-    struct PoseSample {
+    struct PoseSample
+    {
       double hmd_pos[3] = {0};
       double hmd_quat[4] = {0, 0, 0, 1};
       double left_pos[3] = {0};
@@ -372,20 +430,24 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       uint64_t sequence = 0;
     };
 
-   public:
-    CefRefPtr<CefV8Value> CreatePoseValue() const {
-      if (!has_pose_) {
+  public:
+    CefRefPtr<CefV8Value> CreatePoseValue() const
+    {
+      if (!has_pose_)
+      {
         return CefV8Value::CreateNull();
       }
 
-      auto makeVec = [](const double* p3) {
+      auto makeVec = [](const double *p3)
+      {
         CefRefPtr<CefV8Value> arr = CefV8Value::CreateArray(3);
         arr->SetValue(0, CefV8Value::CreateDouble(p3[0]));
         arr->SetValue(1, CefV8Value::CreateDouble(p3[1]));
         arr->SetValue(2, CefV8Value::CreateDouble(p3[2]));
         return arr;
       };
-      auto makeQuat = [](const double* q4) {
+      auto makeQuat = [](const double *q4)
+      {
         CefRefPtr<CefV8Value> arr = CefV8Value::CreateArray(4);
         arr->SetValue(0, CefV8Value::CreateDouble(q4[0]));
         arr->SetValue(1, CefV8Value::CreateDouble(q4[1]));
@@ -421,8 +483,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     bool HasPose() const { return has_pose_; }
 
-    bool BindDevice(CefRefPtr<CefV8Context> context, CefRefPtr<CefV8Value> device) {
-      if (!context.get() || !device.get() || !device->IsObject()) {
+    bool BindDevice(CefRefPtr<CefV8Context> context, CefRefPtr<CefV8Value> device)
+    {
+      if (!context.get() || !device.get() || !device->IsObject())
+      {
         std::cout << "[MinimalRenderHandler] WARN stage5.setDevice invalid arguments" << std::endl;
         return false;
       }
@@ -431,16 +495,22 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       device_context_ = context;
       device_value_ = device;
 
-      auto getObject = [](CefRefPtr<CefV8Value> obj, const char* name) -> CefRefPtr<CefV8Value> {
-        if (!obj.get()) return nullptr;
+      auto getObject = [](CefRefPtr<CefV8Value> obj, const char *name) -> CefRefPtr<CefV8Value>
+      {
+        if (!obj.get())
+          return nullptr;
         CefRefPtr<CefV8Value> value = obj->GetValue(name);
-        if (value.get() && value->IsObject()) return value;
+        if (value.get() && value->IsObject())
+          return value;
         return nullptr;
       };
-      auto getFunction = [](CefRefPtr<CefV8Value> obj, const char* name) -> CefRefPtr<CefV8Value> {
-        if (!obj.get()) return nullptr;
+      auto getFunction = [](CefRefPtr<CefV8Value> obj, const char *name) -> CefRefPtr<CefV8Value>
+      {
+        if (!obj.get())
+          return nullptr;
         CefRefPtr<CefV8Value> value = obj->GetValue(name);
-        if (value.get() && value->IsFunction()) return value;
+        if (value.get() && value->IsFunction())
+          return value;
         return nullptr;
       };
 
@@ -450,9 +520,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       device_quaternion_set_ = getFunction(device_quaternion_, "set");
 
       CefRefPtr<CefV8Value> controllers = getObject(device, "controllers");
-      if (controllers.get()) {
+      if (controllers.get())
+      {
         CefRefPtr<CefV8Value> left = getObject(controllers, "left");
-        if (left.get()) {
+        if (left.get())
+        {
           left_binding_.value = left;
           left_binding_.position = getObject(left, "position");
           left_binding_.position_set = getFunction(left_binding_.position, "set");
@@ -460,7 +532,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
           left_binding_.quaternion_set = getFunction(left_binding_.quaternion, "set");
         }
         CefRefPtr<CefV8Value> right = getObject(controllers, "right");
-        if (right.get()) {
+        if (right.get())
+        {
           right_binding_.value = right;
           right_binding_.position = getObject(right, "position");
           right_binding_.position_set = getFunction(right_binding_.position, "set");
@@ -470,20 +543,26 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       }
 
       const bool ok = device_position_set_.get() && device_quaternion_set_.get();
-      if (!ok) {
+      if (!ok)
+      {
         std::cout << "[MinimalRenderHandler] WARN stage5.setDevice missing position/quaternion setters" << std::endl;
-      } else {
+      }
+      else
+      {
         std::cout << "[MinimalRenderHandler] stage5.setDevice bound" << std::endl;
       }
 
-      if (ok && has_pose_) {
+      if (ok && has_pose_)
+      {
         ApplyPoseToDevice();
       }
       return ok;
     }
 
-    void ClearDevice() {
-      if (device_context_.get()) {
+    void ClearDevice()
+    {
+      if (device_context_.get())
+      {
         std::cout << "[MinimalRenderHandler] stage5.clearDevice" << std::endl;
       }
       device_context_ = nullptr;
@@ -497,19 +576,26 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       applying_pose_ = false;
     }
 
-    bool ApplyPoseToDevice() {
-      if (!device_context_.get()) return false;
-      if (!device_position_set_.get() || !device_quaternion_set_.get()) return false;
-      if (applying_pose_) return true;
+    bool ApplyPoseToDevice()
+    {
+      if (!device_context_.get())
+        return false;
+      if (!device_position_set_.get() || !device_quaternion_set_.get())
+        return false;
+      if (applying_pose_)
+        return true;
 
       bool entered = device_context_->Enter();
-      if (!entered) return false;
+      if (!entered)
+        return false;
 
       applying_pose_ = true;
       auto callVec3 = [](CefRefPtr<CefV8Value> target,
-                        CefRefPtr<CefV8Value> fn,
-                        const double* v) {
-        if (!target.get() || !fn.get() || !fn->IsFunction()) return false;
+                         CefRefPtr<CefV8Value> fn,
+                         const double *v)
+      {
+        if (!target.get() || !fn.get() || !fn->IsFunction())
+          return false;
         CefV8ValueList args;
         args.push_back(CefV8Value::CreateDouble(v[0]));
         args.push_back(CefV8Value::CreateDouble(v[1]));
@@ -519,8 +605,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       };
       auto callQuat = [](CefRefPtr<CefV8Value> target,
                          CefRefPtr<CefV8Value> fn,
-                         const double* v) {
-        if (!target.get() || !fn.get() || !fn->IsFunction()) return false;
+                         const double *v)
+      {
+        if (!target.get() || !fn.get() || !fn->IsFunction())
+          return false;
         CefV8ValueList args;
         args.push_back(CefV8Value::CreateDouble(v[0]));
         args.push_back(CefV8Value::CreateDouble(v[1]));
@@ -533,15 +621,19 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       bool ok_hmd_pos = callVec3(device_position_, device_position_set_, last_pose_.hmd_pos);
       bool ok_hmd_quat = callQuat(device_quaternion_, device_quaternion_set_, last_pose_.hmd_quat);
 
-      auto applyController = [&](ControllerBinding& binding,
-                                 const double* pos,
-                                 const double* quat) -> bool {
-        if (!binding.value.get()) return true;
+      auto applyController = [&](ControllerBinding &binding,
+                                 const double *pos,
+                                 const double *quat) -> bool
+      {
+        if (!binding.value.get())
+          return true;
         bool ok = true;
-        if (binding.position.get() || binding.position_set.get()) {
+        if (binding.position.get() || binding.position_set.get())
+        {
           ok &= callVec3(binding.position, binding.position_set, pos);
         }
-        if (binding.quaternion.get() || binding.quaternion_set.get()) {
+        if (binding.quaternion.get() || binding.quaternion_set.get())
+        {
           ok &= callQuat(binding.quaternion, binding.quaternion_set, quat);
         }
         return ok;
@@ -554,24 +646,32 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
       bool success = ok_hmd_pos && ok_hmd_quat && ok_left && ok_right;
       std::string reason;
-      if (!success) {
-        if (!ok_hmd_pos) reason = "device.position.set";
-        else if (!ok_hmd_quat) reason = "device.quaternion.set";
-        else if (!ok_left) reason = "left controller setters";
-        else reason = "right controller setters";
+      if (!success)
+      {
+        if (!ok_hmd_pos)
+          reason = "device.position.set";
+        else if (!ok_hmd_quat)
+          reason = "device.quaternion.set";
+        else if (!ok_left)
+          reason = "left controller setters";
+        else
+          reason = "right controller setters";
       }
       LogPoseApply(success, reason);
       return success;
     }
 
-   private:
-    void LogPoseApply(bool success, const std::string& reason) {
+  private:
+    void LogPoseApply(bool success, const std::string &reason)
+    {
       auto now = std::chrono::steady_clock::now();
-      if (first_apply_time_ == std::chrono::steady_clock::time_point()) {
+      if (first_apply_time_ == std::chrono::steady_clock::time_point())
+      {
         first_apply_time_ = now;
       }
       device_apply_count_++;
-      if (!success) {
+      if (!success)
+      {
         device_apply_fail_++;
         std::cout << "[MinimalRenderHandler] stage5.applyPose FAILED count=" << device_apply_count_
                   << " fails=" << device_apply_fail_ << " reason=" << reason << std::endl;
@@ -580,7 +680,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       }
 
       if (device_apply_count_ == 1 || (device_apply_count_ % 120) == 0 ||
-          (now - last_log_time_) >= std::chrono::seconds(5)) {
+          (now - last_log_time_) >= std::chrono::seconds(5))
+      {
         double elapsed_ms = std::chrono::duration<double, std::milli>(now - first_apply_time_).count();
         double hz = elapsed_ms > 0.0 ? (device_apply_count_ * 1000.0) / elapsed_ms : 0.0;
         std::cout << "[MinimalRenderHandler] stage5.applyPose OK count=" << device_apply_count_
@@ -589,10 +690,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       }
     }
 
-    int ResolveStage() {
-      if (stage_ > 0) return stage_;
+    int ResolveStage()
+    {
+      if (stage_ > 0)
+        return stage_;
       CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
-      if (cmd.get() && cmd->HasSwitch("v8-ext-stage")) {
+      if (cmd.get() && cmd->HasSwitch("v8-ext-stage"))
+      {
         stage_ = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
       }
       return stage_;
@@ -619,16 +723,18 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     uint64_t device_apply_fail_ = 0;
   };
   // Initialize the minimal handler instance so SimpleApp can return it when staged.
-  if (!g_minimal_handler.get()) g_minimal_handler = new MinimalRenderHandler();
+  if (!g_minimal_handler.get())
+    g_minimal_handler = new MinimalRenderHandler();
   // Use a single app implementation for all processes.
   CefRefPtr<SimpleApp> app = new SimpleApp();
   const int exit_code = CefExecuteProcess(main_args, app, sandbox_info);
-  if (exit_code >= 0) {
+  if (exit_code >= 0)
+  {
     // The sub-process has completed, so return here.
     // DON'T allocate console for sub-processes to avoid multiple windows
     return exit_code;
   }
-  
+
   // Only allocate console for the main process
   AllocateConsole();
   std::cout << "[CEF Demo] Starting CEF application...\n";
@@ -645,8 +751,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
   // Window / headless setup and runtime options
-  int width = 1600;   // desktop/default output width
-  int height = 900;   // desktop/default output height
+  int width = 1600;    // desktop/default output width
+  int height = 900;    // desktop/default output height
   int cef_width = -1;  // browser/input width (defaults to overlay width)
   int cef_height = -1; // browser/input height (can default to half for panorama)
   float scale_m = 1.0f;
@@ -654,35 +760,41 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   std::string start_url = "https://www.google.com";
   int target_fps = 60;
   bool stereo_panorama_flag = false;
-  bool shader_panorama = false;
   float fov_deg = 90.0f; // total FOV; half used in shader
   bool warp_follow_head = false;
 
-  auto parse_bool_switch = [](const std::string& v, bool empty_default_true) {
-    if (v.empty()) return empty_default_true;
+  auto parse_bool_switch = [](const std::string &v, bool empty_default_true)
+  {
+    if (v.empty())
+      return empty_default_true;
     std::string lower = v;
-    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
-      return static_cast<char>(std::tolower(c));
-    });
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c)
+                   { return static_cast<char>(std::tolower(c)); });
     return !(lower == "0" || lower == "false" || lower == "no");
   };
 
-  if (app_cmd->HasSwitch("vr-mode")) {
+  if (app_cmd->HasSwitch("vr-mode"))
+  {
     const std::string v = app_cmd->GetSwitchValue("vr-mode").ToString();
     g_enable_vr_mode = parse_bool_switch(v, true);
-  } else if (app_cmd->HasSwitch("vr")) {
+  }
+  else if (app_cmd->HasSwitch("vr"))
+  {
     const std::string v = app_cmd->GetSwitchValue("vr").ToString();
     g_enable_vr_mode = parse_bool_switch(v, true);
   }
 
-  if (g_enable_vr_mode) {
+  if (g_enable_vr_mode)
+  {
     width = 4000;
     height = 2000;
     target_fps = 120;
     scale_m = 3.0f;
     stereo_panorama_flag = true;
     std::cout << "[CEF Demo] VR mode enabled (OpenVR presenter)" << std::endl;
-  } else {
+  }
+  else
+  {
     std::cout << "[CEF Demo] VR mode disabled (desktop D3D presenter)" << std::endl;
   }
 
@@ -694,61 +806,72 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   const bool fps_explicit = app_cmd->HasSwitch("fps");
   const bool stereo_explicit = app_cmd->HasSwitch("overlay-stereo-panorama");
 
-  if (width_explicit) {
+  if (width_explicit)
+  {
     width = std::max(64, atoi(app_cmd->GetSwitchValue("width").ToString().c_str()));
   }
-  if (height_explicit) {
+  if (height_explicit)
+  {
     height = std::max(64, atoi(app_cmd->GetSwitchValue("height").ToString().c_str()));
   }
-  if (cef_width_explicit) {
+  if (cef_width_explicit)
+  {
     cef_width = std::max(64, atoi(app_cmd->GetSwitchValue("cef-width").ToString().c_str()));
   }
-  if (cef_height_explicit) {
+  if (cef_height_explicit)
+  {
     cef_height = std::max(64, atoi(app_cmd->GetSwitchValue("cef-height").ToString().c_str()));
   }
-  if (scale_explicit) {
+  if (scale_explicit)
+  {
     scale_m = std::max(0.01f, static_cast<float>(atof(app_cmd->GetSwitchValue("scale").ToString().c_str())));
   }
-  if (app_cmd->HasSwitch("overlay-key")) {
+  if (app_cmd->HasSwitch("overlay-key"))
+  {
     overlay_key = app_cmd->GetSwitchValue("overlay-key").ToString();
   }
-  if (app_cmd->HasSwitch("url")) {
+  if (app_cmd->HasSwitch("url"))
+  {
     start_url = app_cmd->GetSwitchValue("url").ToString();
   }
-  if (fps_explicit) {
+  if (fps_explicit)
+  {
     target_fps = std::max(1, atoi(app_cmd->GetSwitchValue("fps").ToString().c_str()));
   }
-  if (!fps_explicit && g_enable_vr_mode) {
+  if (!fps_explicit && g_enable_vr_mode)
+  {
     target_fps = 120;
   }
-  if (!scale_explicit && g_enable_vr_mode) {
+  if (!scale_explicit && g_enable_vr_mode)
+  {
     scale_m = 3.0f;
   }
-  if (stereo_explicit) {
+  if (stereo_explicit)
+  {
     const std::string v = app_cmd->GetSwitchValue("overlay-stereo-panorama");
     stereo_panorama_flag = (v.empty() || v == "1" || v == "true");
   }
-  if (app_cmd->HasSwitch("shader-panorama")) {
-    const std::string v = app_cmd->GetSwitchValue("shader-panorama");
-    shader_panorama = (v.empty() || v == "1" || v == "true");
+  if (app_cmd->HasSwitch("fov-deg"))
+  {
+    fov_deg = (std::max)(1.0f, static_cast<float>(atof(app_cmd->GetSwitchValue("fov-deg").ToString().c_str())));
   }
-  if (app_cmd->HasSwitch("fov-deg")) {
-    fov_deg = std::max(1.0f, static_cast<float>(atof(app_cmd->GetSwitchValue("fov-deg").ToString().c_str())));
-  }
-  if (app_cmd->HasSwitch("warp-follow-head")) {
+  if (app_cmd->HasSwitch("warp-follow-head"))
+  {
     const std::string v = app_cmd->GetSwitchValue("warp-follow-head");
     warp_follow_head = (v.empty() || v == "1" || v == "true");
   }
 
-  if (!g_enable_vr_mode) {
+  if (!g_enable_vr_mode)
+  {
     std::cout << "[CEF Demo] Desktop presenter target -> "
               << width << "x" << height << " @ " << target_fps << " FPS" << std::endl;
   }
   HWND hWnd = nullptr;
-  if (!g_enable_vr_mode) {
+  if (!g_enable_vr_mode)
+  {
     std::cout << "[CEF Demo] Creating window...\n";
     const wchar_t kClassName[] = L"CEFOffscreenDemo";
-    WNDCLASSEXW wcex = { sizeof(WNDCLASSEXW) };
+    WNDCLASSEXW wcex = {sizeof(WNDCLASSEXW)};
     wcex.style = CS_HREDRAW | CS_VREDRAW;
     wcex.lpfnWndProc = WndProc;
     wcex.hInstance = hInstance;
@@ -758,7 +881,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     hWnd = CreateWindowExW(0, kClassName, L"CEF Offscreen Accelerated Paint", WS_OVERLAPPEDWINDOW,
                            CW_USEDEFAULT, 0, width, height, nullptr, nullptr, hInstance, nullptr);
-    if (!hWnd) {
+    if (!hWnd)
+    {
       std::cerr << "[CEF Demo] ERROR: Failed to create window!\n";
       return -1;
     }
@@ -766,24 +890,34 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     std::cout << "[CEF Demo] Window created successfully\n";
     ShowWindow(hWnd, nCmdShow);
     UpdateWindow(hWnd);
-  } else {
+  }
+  else
+  {
     std::cout << "[CEF Demo] VR mode: running headless (no Win32 window)\n";
   }
 
   // If not explicitly specified, pick CEF input size based on overlay/shader settings
-  if (cef_width < 0) {
-    if (g_enable_vr_mode) {
+  if (cef_width < 0)
+  {
+    if (g_enable_vr_mode)
+    {
+      // In VR mode, shader panorama is always enabled, so use half width
       cef_width = width / 2;
-      //cef_width = shader_panorama ? std::max(64, width * 2) : width;
-    } else {
+    }
+    else
+    {
       cef_width = width;
     }
   };
-  if (cef_height < 0) {
-    if (g_enable_vr_mode) {
-      //cef_height = height
-      cef_height = shader_panorama ? std::max(64, height / 4) : height;
-    } else {
+  if (cef_height < 0)
+  {
+    if (g_enable_vr_mode)
+    {
+      // In VR mode with shader panorama, use reduced height
+      cef_height = (std::max)(64, height / 4);
+    }
+    else
+    {
       cef_height = height;
     }
   };
@@ -798,7 +932,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   settings.background_color = CefColorSetARGB(0, 0, 0, 0);
   // Enable DevTools discovery for OSR targets
   settings.remote_debugging_port = 9333;
-  
+
   // Set explicit paths relative to the executable directory so the app runs from any build folder
   wchar_t exePathW[MAX_PATH] = {0};
   GetModuleFileNameW(nullptr, exePathW, MAX_PATH);
@@ -810,14 +944,15 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   CefString(&settings.cache_path).FromWString(binDirW + L"/cache");
   CefString(&settings.root_cache_path).FromWString(binDirW + L"/cache");
   CefString(&settings.browser_subprocess_path).FromWString(binDirW + L"/chromedirect_demo.exe");
-  
+
   // Enable detailed logging to file
   CefString(&settings.log_file).FromWString(binDirW + L"/cef_detailed.log");
   // Force GPU/ANGLE D3D11 switches are applied in SimpleApp::OnBeforeCommandLineProcessing
 
   // Initialize CEF before creating presenters
   std::cout << "[CEF Demo] Initializing CEF...\n";
-  if (!CefInitialize(main_args, settings, app, sandbox_info)) {
+  if (!CefInitialize(main_args, settings, app, sandbox_info))
+  {
     std::cerr << "[CEF Demo] ERROR: CEF initialization failed!\n";
     std::cerr << "[CEF Demo] Check cef_detailed.log for details\n";
     return -1;
@@ -826,34 +961,40 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
   // Presenter (VR or regular D3D)
   std::shared_ptr<Presenter> presenter;
-  if (g_enable_vr_mode) {
+  if (g_enable_vr_mode)
+  {
     std::cout << "[CEF Demo] Initializing OpenVR presenter...\n";
     std::shared_ptr<OpenVRPresenter> vr_presenter = std::make_shared<OpenVRPresenter>();
-    if (!vr_presenter->Initialize(overlay_key.c_str(), width, height, scale_m)) {
+    if (!vr_presenter->Initialize(overlay_key.c_str(), width, height, scale_m))
+    {
       std::cerr << "[CEF Demo] ERROR: OpenVR presenter initialization failed!\n";
       CefShutdown();
       return -1;
     }
     std::cout << "[CEF Demo] OpenVR presenter initialized successfully\n";
-    if (stereo_panorama_flag) {
+    if (stereo_panorama_flag)
+    {
       vr_presenter->SetStereoPanorama(true);
       std::cout << "[CEF Demo] Overlay flag: StereoPanorama enabled\n";
     }
-    if (shader_panorama) {
-      float fov_half_rad = (fov_deg * 0.5f) * 3.1415926535f / 180.0f;
-      vr_presenter->ConfigurePanoramaShader(true, fov_half_rad);
-      std::cout << "[CEF Demo] Shader panorama enabled (FOV half rad=" << fov_half_rad << ")\n";
-      vr_presenter->SetWarpFollowHead(warp_follow_head);
-      if (warp_follow_head) std::cout << "[CEF Demo] Warp follows head yaw enabled\n";
-    }
+    // In VR mode, always enable shader panorama
+    float fov_half_rad = (fov_deg * 0.5f) * 3.1415926535f / 180.0f;
+    vr_presenter->ConfigurePanoramaShader(true, fov_half_rad);
+    std::cout << "[CEF Demo] Shader panorama enabled (FOV half rad=" << fov_half_rad << ")\n";
+    vr_presenter->SetWarpFollowHead(warp_follow_head);
+    if (warp_follow_head)
+      std::cout << "[CEF Demo] Warp follows head yaw enabled\n";
     // Alpha handling defaults for AR: premultiplied on, don't ignore texture alpha
     vr_presenter->SetPremultipliedAlpha(true);
     vr_presenter->SetIgnoreTextureAlpha(false);
     presenter = vr_presenter;
-  } else {
+  }
+  else
+  {
     std::cout << "[CEF Demo] Initializing D3D presenter...\n";
     std::shared_ptr<D3DPresenter> d3d_presenter = std::make_shared<D3DPresenter>();
-    if (!d3d_presenter->Initialize(hWnd, width, height, 1.0f)) {
+    if (!d3d_presenter->Initialize(hWnd, width, height, 1.0f))
+    {
       std::cerr << "[CEF Demo] ERROR: D3D presenter initialization failed!\n";
       CefShutdown();
       return -1;
@@ -864,16 +1005,20 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
   // Create browser windowless
   CefWindowInfo wi;
-  if (g_enable_vr_mode) {
+  if (g_enable_vr_mode)
+  {
     wi.SetAsWindowless(nullptr);
-  } else {
+  }
+  else
+  {
     wi.SetAsWindowless(hWnd);
   }
   wi.windowless_rendering_enabled = true;
   wi.shared_texture_enabled = true;
-  
+
   // Set the D3D device for CEF to match our presenter (if needed)
-  if (presenter && presenter->GetDevice()) {
+  if (presenter && presenter->GetDevice())
+  {
     wi.shared_texture_enabled = true;
     std::cout << "[CEF Demo] Using presenter's D3D11 device with shared textures\n";
   }
@@ -888,7 +1033,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   CefRefPtr<CefClient> base_client = g_client;
 
   std::cout << "[CEF Demo] Creating browser with URL: " << start_url << "\n";
-  if (!CefBrowserHost::CreateBrowser(wi, base_client, start_url, bs, nullptr, nullptr)) {
+  if (!CefBrowserHost::CreateBrowser(wi, base_client, start_url, bs, nullptr, nullptr))
+  {
     std::cerr << "[CEF Demo] ERROR: Failed to create browser!\n";
     CefShutdown();
     return -1;
@@ -899,10 +1045,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   std::cout << "[CEF Demo] Starting message loop...\n";
   MSG msg;
   int frame_count = 0;
-  while (!g_shutdown_requested.load()) {
+  while (!g_shutdown_requested.load())
+  {
     // Process Windows messages
-    while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-      if (msg.message == WM_QUIT) {
+    while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+    {
+      if (msg.message == WM_QUIT)
+      {
         std::cout << "[CEF Demo] WM_QUIT received\n";
         g_shutdown_requested.store(true);
         break;
@@ -910,32 +1059,36 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       TranslateMessage(&msg);
       DispatchMessage(&msg);
     }
-    
-    if (g_shutdown_requested.load()) {
+
+    if (g_shutdown_requested.load())
+    {
       break;
     }
-    
+
     // Process CEF work
     CefDoMessageLoopWork();
-    
+
     // Log every 300 frames (roughly every 5 seconds at 60fps)
-    if (++frame_count % 300 == 0) {
+    if (++frame_count % 300 == 0)
+    {
       std::cout << "[CEF Demo] Message loop running... (frame " << frame_count << ")\n";
     }
-    
+
     Sleep(1); // Small delay to prevent 100% CPU usage
   }
 
   // Cleanup: Close browser and wait for it to close
   std::cout << "[CEF Demo] Shutting down...\n";
-  if (g_client && g_client->GetBrowser()) {
+  if (g_client && g_client->GetBrowser())
+  {
     std::cout << "[CEF Demo] Closing browser...\n";
     g_client->GetBrowser()->GetHost()->CloseBrowser(true);
-    
+
     // Wait for browser to close (with timeout)
     int timeout_ms = 5000;
     int elapsed_ms = 0;
-    while (g_client->GetBrowser() && elapsed_ms < timeout_ms) {
+    while (g_client->GetBrowser() && elapsed_ms < timeout_ms)
+    {
       CefDoMessageLoopWork();
       Sleep(10);
       elapsed_ms += 10;
@@ -946,7 +1099,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   // Reset global references
   g_client = nullptr;
   g_main_window = nullptr;
-  
+
   std::cout << "[CEF Demo] Calling CefShutdown...\n";
   CefShutdown();
   std::cout << "[CEF Demo] Application terminated\n";
