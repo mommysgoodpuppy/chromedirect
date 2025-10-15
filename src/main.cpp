@@ -224,59 +224,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
    public:
     MinimalRenderHandler() : stage_(0), ext_registered_(false), stage5_registered_(false) {}
     void OnWebKitInitialized() override {
-      // Stage 2+: Register a trivial JS-only extension that defines window.cefExt.ping
       CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
       stage_ = 0;
       if (cmd.get() && cmd->HasSwitch("v8-ext-stage")) {
         stage_ = std::max(1, atoi(cmd->GetSwitchValue("v8-ext-stage").ToString().c_str()));
-      }
-      // Defer true CefRegisterExtension to stage >= 3 only. Stage 2 uses safe JS injection in OnContextCreated.
-      if (stage_ >= 3 && !ext_registered_) {
-        // Minimal ES5 global attach; no window/this usage.
-        const char* kExtJS =
-          "if (!cefExt) var cefExt = {};\n"
-          "if (!cefExt.ping) cefExt.ping = function(x){ return (x||0)+1; };\n";
-        const bool ok = CefRegisterExtension("v8/cef_ext_ping", kExtJS, nullptr);
-        ext_registered_ = ok;
-      }
-      // Stage 4+: Provide a minimal pose bridge API for IWER.
-      if (stage_ >= 4) {
-        const char* kPoseJS =
-          "if (!iwerBridge) var iwerBridge = {};\n"
-          "if (!iwerBridge.__logOnce) { iwerBridge.__logOnce = true; try { console.log('[iwerPose] extension installed'); } catch(e){} }\n"
-          "if (!iwerBridge.applyPose) iwerBridge.applyPose = function(s){\n"
-          "  try {\n"
-          "    var g = (typeof window !== 'undefined') ? window : this;\n"
-          "    var dev = null;\n"
-          "    if (g) {\n"
-          "      if (g.__iwerDevice) dev = g.__iwerDevice;\n"
-          "      else if (g.xrDevice) dev = g.xrDevice;\n"
-          "    }\n"
-          "    if (!dev) { try { console.warn('[iwerPose] xrDevice missing'); } catch(e){} return false; }\n"
-          "    if (s && s.hmd) {\n"
-          "      if (s.hmd.pos && dev.position && dev.position.set) dev.position.set(s.hmd.pos[0], s.hmd.pos[1], s.hmd.pos[2]);\n"
-          "      if (s.hmd.quat && dev.quaternion && dev.quaternion.set) dev.quaternion.set(s.hmd.quat[0], s.hmd.quat[1], s.hmd.quat[2], s.hmd.quat[3]);\n"
-          "    }\n"
-          "    if (dev.controllers) {\n"
-          "      var L = dev.controllers['left'];\n"
-          "      var R = dev.controllers['right'];\n"
-          "      if (L && s && s.left) {\n"
-          "        if (s.left.pos && L.position && L.position.set) L.position.set(s.left.pos[0], s.left.pos[1], s.left.pos[2]);\n"
-          "        if (s.left.quat && L.quaternion && L.quaternion.set) L.quaternion.set(s.left.quat[0], s.left.quat[1], s.left.quat[2], s.left.quat[3]);\n"
-          "      }\n"
-          "      if (R && s && s.right) {\n"
-          "        if (s.right.pos && R.position && R.position.set) R.position.set(s.right.pos[0], s.right.pos[1], s.right.pos[2]);\n"
-          "        if (s.right.quat && R.quaternion && R.quaternion.set) R.quaternion.set(s.right.quat[0], s.right.quat[1], s.right.quat[2], s.right.quat[3]);\n"
-          "      }\n"
-          "    }\n"
-          "    if (typeof g !== 'undefined') {\n"
-          "      g.__iwerPoseCount = (g.__iwerPoseCount || 0) + 1;\n"
-          "      if (g.__iwerPoseCount === 1 || (g.__iwerPoseCount % 60) === 0) { try { console.log('[iwerPose] applyPose count=', g.__iwerPoseCount, 'pos=', s && s.hmd && s.hmd.pos); } catch(e){} }\n"
-          "    }\n"
-          "    return true;\n"
-          "  } catch(e) { try { console.error('[iwerPose] applyPose error', e); } catch(_e){} return false; }\n"
-          "};\n";
-        CefRegisterExtension("v8/iwer_pose", kPoseJS, nullptr);
       }
 
       if (stage_ >= 5 && !stage5_registered_) {
@@ -342,7 +293,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         pm->GetArgumentList()->SetString(0, info);
         frame->SendProcessMessage(PID_BROWSER, pm);
       }
-      // Do not modify the context at stage 3; rely solely on CefRegisterExtension.
     }
 
     void OnContextReleased(CefRefPtr<CefBrowser> browser,
