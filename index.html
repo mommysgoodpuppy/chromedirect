@@ -20,6 +20,7 @@
   </head>
   <body>
     <script>
+      //#region IWER Setup
       // Initialize IWER
       console.log("[index] Creating XRDevice...");
       const xrDevice = new IWER.XRDevice(
@@ -34,7 +35,9 @@
       // Configure stereo rendering
       xrDevice.stereoEnabled = true;
       xrDevice.ipd = 0.0068;
+      //#endregion
 
+      //#region Three.js Setup
       // Three.js setup
       const scene = new THREE.Scene();
       const renderer = new THREE.WebGLRenderer({
@@ -67,10 +70,14 @@
       scene.add(cube);
       cube.position.z = -2;
       cube.position.y = 2;
+      //#endregion
 
+      //#region CEF Extension
       // Bind native WebXR device
       window.cefExt.webxr.setDevice(xrDevice);
+      //#endregion
 
+      //#region XR Session & Render Loop
       function xrRenderLoop(timestamp, frame) {
         renderer.render(scene, camera);
         cube.rotation.y += 0.0001;
@@ -111,6 +118,7 @@
       Promise.resolve().then(() => startXrSession());
 
       renderer.render(scene, camera);
+      //#endregion
     </script>
   </body>
 </html>
