@@ -152,40 +152,6 @@ function initOverlay(key: string, scale: number) {
   return { overlay, overlayHandle };
 }
 
-function setOverlayTransformAnimated(
-  overlay: OpenVR.IVROverlay,
-  overlayHandle: OpenVR.OverlayHandle,
-  tSeconds: number,
-) {
-  // Simple lateral oscillation with slight yaw over time
-  const amp = 0.15; // meters
-  const x = Math.sin(tSeconds) * amp;
-  const y = 1.0; // constant height
-  const z = -2.0; // in front of user
-  const yaw = Math.sin(tSeconds * 0.5) * 0.25; // radians, small yaw
-
-  const cy = Math.cos(yaw);
-  const sy = Math.sin(yaw);
-
-  const transform: OpenVR.HmdMatrix34 = {
-    // Row-major 3x4: basis vectors + translation
-    m: [
-      [ cy, 0.0,  sy,  x ],
-      [0.0, 1.0, 0.0,  y ],
-      [-sy, 0.0,  cy,  z ],
-    ],
-  };
-
-  const buf = new ArrayBuffer(OpenVR.HmdMatrix34Struct.byteSize);
-  OpenVR.HmdMatrix34Struct.write(transform, new DataView(buf));
-  const ptr = Deno.UnsafePointer.of<OpenVR.HmdMatrix34>(buf)!;
-  overlay.SetOverlayTransformAbsolute(
-    overlayHandle,
-    OpenVR.TrackingUniverseOrigin.TrackingUniverseStanding,
-    ptr,
-  );
-}
-
 async function spawnHost(exe: string, args: Args) {
   // C++ currently uses defaults; we still pass helpful flags for future-proofing
   const params = [
