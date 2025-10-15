@@ -193,17 +193,6 @@ bool OpenVRPresenter::InitializeOpenVR()
   return true;
 }
 
-void OpenVRPresenter::SetStereoPanorama(bool enable)
-{
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!overlay_created_)
-    return;
-  vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_StereoPanorama, enable);
-  // Ensure regular panorama flag is off when stereo is on
-  if (enable)
-    vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_Panorama, false);
-}
-
 void OpenVRPresenter::ConfigurePanoramaShader(bool enable, float fovHalfRadians)
 {
   std::lock_guard<std::mutex> lock(mtx_);
