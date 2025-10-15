@@ -678,7 +678,7 @@ post_submit_visibility_check:
 
   // Optionally pace submissions with the runtime's update rate to avoid spamming.
   // This blocks until the top of frame (or timeout). Keep timeout conservative to avoid long UI stalls.
-  vr::VROverlay()->WaitFrameSync(100);
+  vr::VROverlay()->WaitFrameSync(0.1);
 }
 
 void OpenVRPresenter::Resize(int width, int height, float scale) {

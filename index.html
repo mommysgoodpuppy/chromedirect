@@ -187,6 +187,7 @@
 
             function xrRenderLoop(timestamp, frame) {
                 renderer.render(scene, camera);
+                cube.rotation.y += 0.0001;
             }
 
             async function startXrSession() {
