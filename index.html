@@ -87,18 +87,6 @@
         });
 
         const gl = renderer.getContext();
-        await gl.makeXRCompatible();
-        const baseLayer = new XRWebGLLayer(
-          session,
-          gl,
-          {
-            antialias: true,
-            alpha: false,
-            depth: false,
-            stencil: false,
-          },
-        );
-        session.updateRenderState({ baseLayer });
 
         await renderer.xr.setSession(session);
         renderer.setAnimationLoop(xrRenderLoop);
@@ -114,6 +102,7 @@
         renderer.render(scene, camera);
         cube.rotation.y += 0.0001;
       }
+
     </script>
   </body>
 </html>
