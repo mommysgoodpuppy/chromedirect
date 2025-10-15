@@ -25,6 +25,7 @@
 #include <cctype>
 #include <cstdint>
 #include <vector>
+#include <chrono>
 
 // Configuration (runtime via flags)
 static bool g_enable_vr_mode = false; // --vr-mode=true to enable OpenVR presenter
@@ -284,17 +285,22 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
           explicit Stage5Handler(MinimalRenderHandler* owner) : owner_(owner) {}
           bool Execute(const CefString& name,
                        CefRefPtr<CefV8Value> /*object*/,
-                       const CefV8ValueList& /*arguments*/,
+                       const CefV8ValueList& arguments,
                        CefRefPtr<CefV8Value>& retval,
                        CefString& /*exception*/) override {
             if (!owner_) return false;
-            if (name == "__stage5GetPose") {
-              retval = owner_->HasPose() ? owner_->CreatePoseValue()
-                                         : CefV8Value::CreateNull();
+            if (name == "__stage5SetDevice") {
+              CefRefPtr<CefV8Context> ctx = CefV8Context::GetCurrentContext();
+              bool ok = false;
+              if (arguments.size() > 0 && arguments[0].get() && arguments[0]->IsObject()) {
+                ok = owner_->BindDevice(ctx, arguments[0]);
+              }
+              retval = CefV8Value::CreateBool(ok);
               return true;
             }
-            if (name == "__stage5HasPose") {
-              retval = CefV8Value::CreateBool(owner_->HasPose());
+            if (name == "__stage5ClearDevice") {
+              owner_->ClearDevice();
+              retval = CefV8Value::CreateBool(true);
               return true;
             }
             return false;
@@ -308,10 +314,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         const char* kStage5JS =
           "if (!cefExt) var cefExt = {};\n"
           "if (!cefExt.stage5) cefExt.stage5 = {};\n"
-          "native function __stage5GetPose();\n"
-          "native function __stage5HasPose();\n"
-          "cefExt.stage5.getPose = function(){ return __stage5GetPose(); };\n"
-          "cefExt.stage5.hasPose = function(){ return __stage5HasPose(); };\n";
+          "native function __stage5SetDevice();\n"
+          "native function __stage5ClearDevice();\n"
+          "cefExt.stage5.setDevice = function(dev){ return __stage5SetDevice(dev); };\n"
+          "cefExt.stage5.clearDevice = function(){ return __stage5ClearDevice(); };\n";
         CefRegisterExtension("v8/cef_stage5", kStage5JS, new Stage5Handler(this));
         stage5_registered_ = true;
       }
@@ -339,6 +345,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       // Do not modify the context at stage 3; rely solely on CefRegisterExtension.
     }
 
+    void OnContextReleased(CefRefPtr<CefBrowser> browser,
+                           CefRefPtr<CefFrame> frame,
+                           CefRefPtr<CefV8Context> context) override {
+      if (device_context_.get() && context.get() && context->IsSame(device_context_)) {
+        ClearDevice();
+      }
+    }
+
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
                                   CefProcessId source_process,
@@ -346,6 +360,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       if (!message.get()) return false;
       if (message->GetName() != "VR_STATE") return false;
       if (ResolveStage() < 5) return false;
+      std::cout << "test2";
 
       auto args = message->GetArgumentList();
       if (!args.get() || args->GetSize() < 1 || args->GetType(0) != VTYPE_BINARY) return false;
@@ -365,17 +380,19 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
       pose_sequence_++;
       for (int i = 0; i < 3; ++i) {
-        last_pose_.hmd_pos[i] = hmd_pos[i];
-        last_pose_.left_pos[i] = left_pos[i];
-        last_pose_.right_pos[i] = right_pos[i];
+        last_pose_.hmd_pos[i] = static_cast<double>(hmd_pos[i]);
+        last_pose_.left_pos[i] = static_cast<double>(left_pos[i]);
+        last_pose_.right_pos[i] = static_cast<double>(right_pos[i]);
       }
       for (int i = 0; i < 4; ++i) {
-        last_pose_.hmd_quat[i] = hmd_quat[i];
-        last_pose_.left_quat[i] = left_quat[i];
-        last_pose_.right_quat[i] = right_quat[i];
+        last_pose_.hmd_quat[i] = static_cast<double>(hmd_quat[i]);
+        last_pose_.left_quat[i] = static_cast<double>(left_quat[i]);
+        last_pose_.right_quat[i] = static_cast<double>(right_quat[i]);
       }
       last_pose_.sequence = pose_sequence_;
       has_pose_ = true;
+
+      ApplyPoseToDevice();
 
       if (pose_sequence_ == 1 || (pose_sequence_ % 120) == 0) {
         std::cout << "[MinimalRenderHandler] Pose updated seq=" << pose_sequence_
@@ -388,6 +405,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     IMPLEMENT_REFCOUNTING(MinimalRenderHandler);
    private:
+    struct ControllerBinding {
+      CefRefPtr<CefV8Value> value;
+      CefRefPtr<CefV8Value> position;
+      CefRefPtr<CefV8Value> position_set;
+      CefRefPtr<CefV8Value> quaternion;
+      CefRefPtr<CefV8Value> quaternion_set;
+    };
+
     struct PoseSample {
       double hmd_pos[3] = {0};
       double hmd_quat[4] = {0, 0, 0, 1};
@@ -447,7 +472,175 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     bool HasPose() const { return has_pose_; }
 
+    bool BindDevice(CefRefPtr<CefV8Context> context, CefRefPtr<CefV8Value> device) {
+      if (!context.get() || !device.get() || !device->IsObject()) {
+        std::cout << "[MinimalRenderHandler] WARN stage5.setDevice invalid arguments" << std::endl;
+        return false;
+      }
+
+      ClearDevice();
+      device_context_ = context;
+      device_value_ = device;
+
+      auto getObject = [](CefRefPtr<CefV8Value> obj, const char* name) -> CefRefPtr<CefV8Value> {
+        if (!obj.get()) return nullptr;
+        CefRefPtr<CefV8Value> value = obj->GetValue(name);
+        if (value.get() && value->IsObject()) return value;
+        return nullptr;
+      };
+      auto getFunction = [](CefRefPtr<CefV8Value> obj, const char* name) -> CefRefPtr<CefV8Value> {
+        if (!obj.get()) return nullptr;
+        CefRefPtr<CefV8Value> value = obj->GetValue(name);
+        if (value.get() && value->IsFunction()) return value;
+        return nullptr;
+      };
+
+      device_position_ = getObject(device, "position");
+      device_position_set_ = getFunction(device_position_, "set");
+      device_quaternion_ = getObject(device, "quaternion");
+      device_quaternion_set_ = getFunction(device_quaternion_, "set");
+
+      CefRefPtr<CefV8Value> controllers = getObject(device, "controllers");
+      if (controllers.get()) {
+        CefRefPtr<CefV8Value> left = getObject(controllers, "left");
+        if (left.get()) {
+          left_binding_.value = left;
+          left_binding_.position = getObject(left, "position");
+          left_binding_.position_set = getFunction(left_binding_.position, "set");
+          left_binding_.quaternion = getObject(left, "quaternion");
+          left_binding_.quaternion_set = getFunction(left_binding_.quaternion, "set");
+        }
+        CefRefPtr<CefV8Value> right = getObject(controllers, "right");
+        if (right.get()) {
+          right_binding_.value = right;
+          right_binding_.position = getObject(right, "position");
+          right_binding_.position_set = getFunction(right_binding_.position, "set");
+          right_binding_.quaternion = getObject(right, "quaternion");
+          right_binding_.quaternion_set = getFunction(right_binding_.quaternion, "set");
+        }
+      }
+
+      const bool ok = device_position_set_.get() && device_quaternion_set_.get();
+      if (!ok) {
+        std::cout << "[MinimalRenderHandler] WARN stage5.setDevice missing position/quaternion setters" << std::endl;
+      } else {
+        std::cout << "[MinimalRenderHandler] stage5.setDevice bound" << std::endl;
+      }
+
+      if (ok && has_pose_) {
+        ApplyPoseToDevice();
+      }
+      return ok;
+    }
+
+    void ClearDevice() {
+      if (device_context_.get()) {
+        std::cout << "[MinimalRenderHandler] stage5.clearDevice" << std::endl;
+      }
+      device_context_ = nullptr;
+      device_value_ = nullptr;
+      device_position_ = nullptr;
+      device_position_set_ = nullptr;
+      device_quaternion_ = nullptr;
+      device_quaternion_set_ = nullptr;
+      left_binding_ = ControllerBinding();
+      right_binding_ = ControllerBinding();
+      applying_pose_ = false;
+    }
+
+    bool ApplyPoseToDevice() {
+      std::cout << "test";
+      if (!device_context_.get()) return false;
+      if (!device_position_set_.get() || !device_quaternion_set_.get()) return false;
+      if (applying_pose_) return true;
+
+      bool entered = device_context_->Enter();
+      if (!entered) return false;
+
+      applying_pose_ = true;
+      auto callVec3 = [](CefRefPtr<CefV8Value> target,
+                        CefRefPtr<CefV8Value> fn,
+                        const double* v) {
+        if (!target.get() || !fn.get() || !fn->IsFunction()) return false;
+        CefV8ValueList args;
+        args.push_back(CefV8Value::CreateDouble(v[0]));
+        args.push_back(CefV8Value::CreateDouble(v[1]));
+        args.push_back(CefV8Value::CreateDouble(v[2]));
+        fn->ExecuteFunction(target, args);
+        return true;
+      };
+      auto callQuat = [](CefRefPtr<CefV8Value> target,
+                         CefRefPtr<CefV8Value> fn,
+                         const double* v) {
+        if (!target.get() || !fn.get() || !fn->IsFunction()) return false;
+        CefV8ValueList args;
+        args.push_back(CefV8Value::CreateDouble(v[0]));
+        args.push_back(CefV8Value::CreateDouble(v[1]));
+        args.push_back(CefV8Value::CreateDouble(v[2]));
+        args.push_back(CefV8Value::CreateDouble(v[3]));
+        fn->ExecuteFunction(target, args);
+        return true;
+      };
+
+      bool ok_hmd_pos = callVec3(device_position_, device_position_set_, last_pose_.hmd_pos);
+      bool ok_hmd_quat = callQuat(device_quaternion_, device_quaternion_set_, last_pose_.hmd_quat);
+
+      auto applyController = [&](ControllerBinding& binding,
+                                 const double* pos,
+                                 const double* quat) -> bool {
+        if (!binding.value.get()) return true;
+        bool ok = true;
+        if (binding.position.get() || binding.position_set.get()) {
+          ok &= callVec3(binding.position, binding.position_set, pos);
+        }
+        if (binding.quaternion.get() || binding.quaternion_set.get()) {
+          ok &= callQuat(binding.quaternion, binding.quaternion_set, quat);
+        }
+        return ok;
+      };
+      bool ok_left = applyController(left_binding_, last_pose_.left_pos, last_pose_.left_quat);
+      bool ok_right = applyController(right_binding_, last_pose_.right_pos, last_pose_.right_quat);
+
+      applying_pose_ = false;
+      device_context_->Exit();
+
+      bool success = ok_hmd_pos && ok_hmd_quat && ok_left && ok_right;
+      std::string reason;
+      if (!success) {
+        if (!ok_hmd_pos) reason = "device.position.set";
+        else if (!ok_hmd_quat) reason = "device.quaternion.set";
+        else if (!ok_left) reason = "left controller setters";
+        else reason = "right controller setters";
+      }
+      LogPoseApply(success, reason);
+      return success;
+    }
+
    private:
+    void LogPoseApply(bool success, const std::string& reason) {
+      auto now = std::chrono::steady_clock::now();
+      if (first_apply_time_ == std::chrono::steady_clock::time_point()) {
+        first_apply_time_ = now;
+      }
+      device_apply_count_++;
+      if (!success) {
+        device_apply_fail_++;
+        std::cout << "[MinimalRenderHandler] stage5.applyPose FAILED count=" << device_apply_count_
+                  << " fails=" << device_apply_fail_ << " reason=" << reason << std::endl;
+        last_log_time_ = now;
+        return;
+      }
+
+      if (device_apply_count_ == 1 || (device_apply_count_ % 2) == 0 ||
+          (now - last_log_time_) >= std::chrono::seconds(5)) {
+        double elapsed_ms = std::chrono::duration<double, std::milli>(now - first_apply_time_).count();
+        double hz = elapsed_ms > 0.0 ? (device_apply_count_ * 1000.0) / elapsed_ms : 0.0;
+        std::cout << "[MinimalRenderHandler] stage5.applyPose OK count=" << device_apply_count_
+                  << " avg=" << hz << "Hz fails=" << device_apply_fail_ << std::endl;
+        last_log_time_ = now;
+      }
+    }
+
     int ResolveStage() {
       if (stage_ > 0) return stage_;
       CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
@@ -463,6 +656,19 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     PoseSample last_pose_{};
     bool has_pose_ = false;
     uint64_t pose_sequence_ = 0;
+    CefRefPtr<CefV8Context> device_context_;
+    CefRefPtr<CefV8Value> device_value_;
+    CefRefPtr<CefV8Value> device_position_;
+    CefRefPtr<CefV8Value> device_position_set_;
+    CefRefPtr<CefV8Value> device_quaternion_;
+    CefRefPtr<CefV8Value> device_quaternion_set_;
+    ControllerBinding left_binding_;
+    ControllerBinding right_binding_;
+    bool applying_pose_ = false;
+    std::chrono::steady_clock::time_point first_apply_time_{};
+    std::chrono::steady_clock::time_point last_log_time_{};
+    uint64_t device_apply_count_ = 0;
+    uint64_t device_apply_fail_ = 0;
   };
   // Initialize the minimal handler instance so SimpleApp can return it when staged.
   if (!g_minimal_handler.get()) g_minimal_handler = new MinimalRenderHandler();

@@ -71,6 +71,9 @@
         // XR Session handling (auto-start capable via IWER polyfill)
         const statusEl = document.getElementById('status');
         const params = new URLSearchParams(location.search);
+        let stage5NativePose = false;
+        let fallbackPoseTimer = null;
+        let stage5LastBindAttempt = 0;
 
         let lastPoseSequence = 0;
         let appliedPoseCount = 0;
@@ -121,6 +124,15 @@
         }
 
         function updatePoseFromBridge() {
+            if (!stage5NativePose) {
+                const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+                if ((now - stage5LastBindAttempt) >= 1000) {
+                    stage5LastBindAttempt = now;
+                    if (tryBindStage5Device('retry')) {
+                        return;
+                    }
+                }
+            }
             const { pose, source } = fetchPoseSample();
             if (!pose) return;
 
@@ -146,14 +158,65 @@
             }
         }
 
-        const pollOverride = parseInt(params.get('posePoll') || '', 10);
-        const posePollMs = !isNaN(pollOverride) && pollOverride > 0 ? Math.max(4, pollOverride) : 16;
-        updatePoseFromBridge();
-        window.__iwerPoseTimer = setInterval(updatePoseFromBridge, posePollMs);
+        function getStage5Handle() {
+            const ext = window.cefExt && window.cefExt.stage5;
+            return ext || null;
+        }
 
+        function stopFallbackPolling() {
+            if (fallbackPoseTimer !== null) {
+                clearInterval(fallbackPoseTimer);
+                fallbackPoseTimer = null;
+                window.__iwerPoseTimer = null;
+            }
+        }
+
+        function ensureFallbackPolling() {
+
+        }
+
+        function tryBindStage5Device(label) {
+            console.log("try bind")
+            const handle = getStage5Handle();
+
+            if (!handle || typeof handle.setDevice !== 'function') return false;
+            console.log("got handle")
+            try {
+                const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+                stage5LastBindAttempt = now;
+                console.log("binding to setDevice")
+                const bound = !!handle.setDevice(xrDevice);
+                console.log(bound)
+                if (bound) {
+                    const wasInactive = !stage5NativePose;
+                    stage5NativePose = true;
+                    stopFallbackPolling();
+                    if (wasInactive) {
+                        const tag = label ? ' (' + label + ')' : '';
+                        console.log('[index] stage5 native pose push enabled' + tag);
+                    }
+                    return true;
+                }
+                else console.log("not bound")
+                if (!stage5NativePose && label !== 'retry') {
+                    console.warn('[index] stage5.setDevice returned false');
+                }
+            } catch (e) {
+                if (label !== 'retry') {
+                    console.warn('[index] stage5.setDevice failed', e);
+                }
+            }
+            return false;
+        }
+
+        if (!tryBindStage5Device('initial')) {
+            ensureFallbackPolling();
+        }
 
         function xrRenderLoop(timestamp, frame) {
-            updatePoseFromBridge();
+            if (!stage5NativePose) {
+                updatePoseFromBridge();
+            }
             //cube.rotation.y += 0.0001;
             renderer.render(scene, camera);
         }
@@ -170,6 +233,12 @@
                 return;
             }
 
+            if (!stage5NativePose) {
+                if (!tryBindStage5Device('session')) {
+                    ensureFallbackPolling();
+                }
+            }
+
             try {
                 // In IWER, immersive-ar can start without user gesture; use it to auto-enter
                 const session = await navigator.xr.requestSession('immersive-ar', {
@@ -183,6 +252,19 @@
                     statusEl.textContent = 'XR Session Ended';
                     statusEl.style.backgroundColor = '#607D8B';
                     renderer.setAnimationLoop(null);
+                    const stage5WasActive = stage5NativePose;
+                    const handle = getStage5Handle();
+                    if (stage5WasActive && handle && typeof handle.clearDevice === 'function') {
+                        try {
+                            handle.clearDevice();
+                        } catch (e) {
+                            console.warn('[index] stage5.clearDevice failed', e);
+                        }
+                    }
+                    stage5NativePose = false;
+                    if (stage5WasActive) {
+                        //ensureFallbackPolling();
+                    }
                 });
 
                 // Prefer an explicit XRWebGLLayer with antialias enabled

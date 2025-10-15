@@ -149,9 +149,10 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
       pose_ms = std::max(5, atoi(cmd->GetSwitchValue("iwer-apply-pose").ToString().c_str()));
       if (pose_ms <= 0) pose_ms = 11;
     } else if (vr_mode_ && (cmd->HasSwitch("enable-iwer-bridge") || stage_switch >= 5)) {
-      pose_ms = 11;
+      pose_ms = (stage_switch >= 5) ? 8 : 11;
     }
   }
+  const int desktop_interval_default = (stage_switch >= 5) ? 8 : 16;
   if (pose_ms > 0 && !vr_mode_) {
     std::cout << "[Client] Ignoring --iwer-apply-pose in desktop mode (no OpenVR data available)\n";
     pose_ms = 0;
@@ -245,8 +246,10 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   const bool stage5_bridge = stage_switch >= 5;
   if (bridge_flag || stage5_bridge) {
     const char* source = bridge_flag ? "--enable-iwer-bridge" : "--v8-ext-stage>=5";
+    const int report_interval = vr_mode_ ? pose_ms : desktop_interval_default;
     std::cout << "[Client] IWER pose bridge enabled via " << source
-              << " (" << (vr_mode_ ? "OpenVR" : "desktop synthetic") << ")\n";
+              << " (" << (vr_mode_ ? "OpenVR" : "desktop synthetic")
+              << ", interval=" << report_interval << "ms)\n";
   }
 
   // Desktop-mode synthetic pose: drive iwerBridge.applyPose via ExecuteJavaScript without renderer bridge.
@@ -342,7 +345,7 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
       int tick_;
       IMPLEMENT_REFCOUNTING(DesktopPoseTask);
     };
-    CefPostDelayedTask(TID_UI, new DesktopPoseTask(this, 16), 200);
+    CefPostDelayedTask(TID_UI, new DesktopPoseTask(this, desktop_interval_default), 200);
   }
 }
 
