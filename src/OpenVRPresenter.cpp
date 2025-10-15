@@ -2,6 +2,8 @@
 
 #include <stdexcept>
 #include <iostream>
+#include <chrono>
+#include <iomanip>
 #include <dxgi.h>
 #include <d3dcompiler.h>
 
@@ -360,6 +362,36 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
   
   static int present_count = 0;
   present_count++;
+  static auto first_present_ts = std::chrono::steady_clock::now();
+  static auto last_present_ts = first_present_ts;
+  static auto last_report_ts = first_present_ts;
+  static double worst_present_ms = 0.0;
+
+  auto now = std::chrono::steady_clock::now();
+  double delta_s = std::chrono::duration<double>(now - last_present_ts).count();
+  last_present_ts = now;
+  if (delta_s > 0.0) {
+    double delta_ms = delta_s * 1000.0;
+    if (delta_ms > worst_present_ms) {
+      worst_present_ms = delta_ms;
+    }
+  }
+
+  const bool interval_report = (present_count % 120) == 0;
+  const bool time_report = (std::chrono::duration<double>(now - last_report_ts).count() >= 5.0);
+  if (present_count == 1 || interval_report || time_report) {
+    double total_s = std::chrono::duration<double>(now - first_present_ts).count();
+    double avg_hz = total_s > 0.0 ? static_cast<double>(present_count) / total_s : 0.0;
+    double avg_ms = avg_hz > 0.0 ? 1000.0 / avg_hz : 0.0;
+    double last_ms = delta_s > 0.0 ? delta_s * 1000.0 : 0.0;
+    std::cout << std::fixed << std::setprecision(2)
+              << "[OpenVR] Submit stats: total=" << present_count
+              << " avg=" << avg_hz << "Hz (" << avg_ms << "ms)"
+              << " last=" << last_ms << "ms"
+              << " worst=" << worst_present_ms << "ms"
+              << std::defaultfloat << "\n";
+    last_report_ts = now;
+  }
   
   if (!device_ || !context_ || !openvr_initialized_ || !overlay_created_) {
     std::cerr << "[OpenVR] ERROR: Not properly initialized\n";

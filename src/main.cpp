@@ -360,7 +360,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       if (!message.get()) return false;
       if (message->GetName() != "VR_STATE") return false;
       if (ResolveStage() < 5) return false;
-      std::cout << "test2";
 
       auto args = message->GetArgumentList();
       if (!args.get() || args->GetSize() < 1 || args->GetType(0) != VTYPE_BINARY) return false;
@@ -549,7 +548,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     }
 
     bool ApplyPoseToDevice() {
-      std::cout << "test";
       if (!device_context_.get()) return false;
       if (!device_position_set_.get() || !device_quaternion_set_.get()) return false;
       if (applying_pose_) return true;
@@ -631,7 +629,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         return;
       }
 
-      if (device_apply_count_ == 1 || (device_apply_count_ % 2) == 0 ||
+      if (device_apply_count_ == 1 || (device_apply_count_ % 120) == 0 ||
           (now - last_log_time_) >= std::chrono::seconds(5)) {
         double elapsed_ms = std::chrono::duration<double, std::milli>(now - first_apply_time_).count();
         double hz = elapsed_ms > 0.0 ? (device_apply_count_ * 1000.0) / elapsed_ms : 0.0;

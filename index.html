@@ -71,134 +71,55 @@
         // XR Session handling (auto-start capable via IWER polyfill)
         const statusEl = document.getElementById('status');
         const params = new URLSearchParams(location.search);
-        let stage5NativePose = false;
-        let fallbackPoseTimer = null;
-        let stage5LastBindAttempt = 0;
-
-        let lastPoseSequence = 0;
-        let appliedPoseCount = 0;
-
-        function setVec3(target, values) {
-            if (!target || typeof target.set !== 'function') { 
-                console.log("err1")
-                return;
-            };
-            if (!Array.isArray(values) || values.length !== 3){ 
-                console.log("err2")
-                return;
-            }
-
-            target.set(values[0]*0.01, values[1]*1.6, values[2]*0.01);
-        }
-
-        function setQuat(target, values) {
-            if (!target || typeof target.set !== 'function') return;
-            if (!Array.isArray(values) || values.length !== 4) return;
-            target.set(values[0]*0.01, values[1]*0.01, values[2], values[3]*0.01);
-        }
-
-        function applyPoseToController(controller, pose) {
-            if (!controller || !pose) return;
-            setVec3(controller.position, pose.pos);
-            setQuat(controller.quaternion, pose.quat);
-        }
-
-        function fetchPoseSample() {
-            const stage5 = window.cefExt && window.cefExt.stage5;
-            //console.log(stage5)
-            if (stage5 && typeof stage5.getPose === 'function') {
-                if (typeof stage5.hasPose !== 'function' || stage5.hasPose()) {
-                    const pose = stage5.getPose();
-                    //console.log(JSON.stringify(pose))
-                    if (pose) return { pose, source: 'stage5' };
-                }
-            }
-            const bridge = window.iwerBridge;
-            if (bridge && typeof bridge.getPose === 'function') {
-                if (typeof bridge.hasPose !== 'function' || bridge.hasPose()) {
-                    const pose = bridge.getPose();
-                    if (pose) return { pose, source: 'iwerBridge' };
-                }
-            }
-            return { pose: null, source: null };
-        }
-
-        function updatePoseFromBridge() {
-            if (!stage5NativePose) {
-                const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-                if ((now - stage5LastBindAttempt) >= 1000) {
-                    stage5LastBindAttempt = now;
-                    if (tryBindStage5Device('retry')) {
-                        return;
-                    }
-                }
-            }
-            const { pose, source } = fetchPoseSample();
-            if (!pose) return;
-
-            const seq = typeof pose.sequence === 'number' ? pose.sequence : undefined;
-            if (seq !== undefined && seq === lastPoseSequence) return;
-            if (seq !== undefined) lastPoseSequence = seq;
-
-            if (pose.hmd) {
-                //console.log(pose.hmd.pos)
-                setVec3(xrDevice.position, pose.hmd.pos);
-                setQuat(xrDevice.quaternion, pose.hmd.quat);
-            }
-            if (xrDevice.controllers) {
-                if (pose.left) applyPoseToController(xrDevice.controllers.left, pose.left);
-                if (pose.right) applyPoseToController(xrDevice.controllers.right, pose.right);
-            }
-
-            appliedPoseCount++;
-            if (appliedPoseCount === 1 || (appliedPoseCount % 120) === 0) {
-                try {
-                    console.log('[index] applied pose from', source || 'unknown', 'seq=', lastPoseSequence, 'hmd=', pose.hmd && pose.hmd.pos);
-                } catch (e) {}
-            }
-        }
+        let stage5Bound = false;
+        let stage5RetryTimer = null;
 
         function getStage5Handle() {
             const ext = window.cefExt && window.cefExt.stage5;
             return ext || null;
         }
 
-        function stopFallbackPolling() {
-            if (fallbackPoseTimer !== null) {
-                clearInterval(fallbackPoseTimer);
-                fallbackPoseTimer = null;
-                window.__iwerPoseTimer = null;
+        function clearStage5Retry() {
+            if (stage5RetryTimer !== null) {
+                clearInterval(stage5RetryTimer);
+                stage5RetryTimer = null;
             }
         }
 
-        function ensureFallbackPolling() {
-
+        function scheduleStage5Retry() {
+            if (stage5Bound || stage5RetryTimer !== null) {
+                return;
+            }
+            stage5RetryTimer = setInterval(() => {
+                if (stage5Bound) {
+                    clearStage5Retry();
+                    return;
+                }
+                tryBindStage5Device('retry');
+            }, 1000);
         }
 
         function tryBindStage5Device(label) {
-            console.log("try bind")
             const handle = getStage5Handle();
-
-            if (!handle || typeof handle.setDevice !== 'function') return false;
-            console.log("got handle")
+            if (!handle || typeof handle.setDevice !== 'function') {
+                if (label !== 'retry') {
+                    console.warn('[index] stage5.setDevice unavailable');
+                }
+                return false;
+            }
             try {
-                const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-                stage5LastBindAttempt = now;
-                console.log("binding to setDevice")
                 const bound = !!handle.setDevice(xrDevice);
-                console.log(bound)
                 if (bound) {
-                    const wasInactive = !stage5NativePose;
-                    stage5NativePose = true;
-                    stopFallbackPolling();
+                    const wasInactive = !stage5Bound;
+                    stage5Bound = true;
+                    clearStage5Retry();
                     if (wasInactive) {
                         const tag = label ? ' (' + label + ')' : '';
                         console.log('[index] stage5 native pose push enabled' + tag);
                     }
                     return true;
                 }
-                else console.log("not bound")
-                if (!stage5NativePose && label !== 'retry') {
+                if (!stage5Bound && label !== 'retry') {
                     console.warn('[index] stage5.setDevice returned false');
                 }
             } catch (e) {
@@ -210,14 +131,10 @@
         }
 
         if (!tryBindStage5Device('initial')) {
-            ensureFallbackPolling();
+            scheduleStage5Retry();
         }
 
         function xrRenderLoop(timestamp, frame) {
-            if (!stage5NativePose) {
-                updatePoseFromBridge();
-            }
-            //cube.rotation.y += 0.0001;
             renderer.render(scene, camera);
         }
 
@@ -233,10 +150,8 @@
                 return;
             }
 
-            if (!stage5NativePose) {
-                if (!tryBindStage5Device('session')) {
-                    ensureFallbackPolling();
-                }
+            if (!stage5Bound && !tryBindStage5Device('session')) {
+                scheduleStage5Retry();
             }
 
             try {
@@ -252,7 +167,7 @@
                     statusEl.textContent = 'XR Session Ended';
                     statusEl.style.backgroundColor = '#607D8B';
                     renderer.setAnimationLoop(null);
-                    const stage5WasActive = stage5NativePose;
+                    const stage5WasActive = stage5Bound;
                     const handle = getStage5Handle();
                     if (stage5WasActive && handle && typeof handle.clearDevice === 'function') {
                         try {
@@ -261,9 +176,9 @@
                             console.warn('[index] stage5.clearDevice failed', e);
                         }
                     }
-                    stage5NativePose = false;
-                    if (stage5WasActive) {
-                        //ensureFallbackPolling();
+                    stage5Bound = false;
+                    if (!stage5RetryTimer) {
+                        scheduleStage5Retry();
                     }
                 });
 
@@ -295,7 +210,7 @@
             }
         }
 
-        // Manual button fallback and auto-start attempt
+        // Manual button entry and auto-start attempt
         document.getElementById('xr-button').addEventListener('click', () => { startXrSession(); });
         // Kick off automatically after IWER installs the runtime
         Promise.resolve().then(() => startXrSession());

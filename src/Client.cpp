@@ -14,6 +14,8 @@
 #include <cstring>
 #include <cmath>
 #include <cstdio>
+#include <chrono>
+#include <iomanip>
 #include <openvr.h>
 
 OffscreenClient::OffscreenClient(HWND host_window,
@@ -77,65 +79,7 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     CefPostDelayedTask(TID_UI, new PingTask(this, v8_ping_ms_), v8_ping_ms_);
   }
 
-  // Optional: minimal VR data via postMessage to page
-  if (cmd.get() && cmd->HasSwitch("v8-post-vr")) {
-    int ms = std::max(100, atoi(cmd->GetSwitchValue("v8-post-vr").ToString().c_str()));
-    v8_vr_enabled_ = true;
-    v8_vr_ms_ = ms;
-    v8_vr_tick_ = 0;
-    std::cout << "[Client] V8 VR postMessage enabled (interval=" << v8_vr_ms_ << " ms)\n";
 
-    // Install a simple page-side listener (idempotent) to log incoming messages
-    auto frame = browser->GetMainFrame();
-    if (frame.get()) {
-      frame->ExecuteJavaScript(R"JS((function(){
-        try {
-          if (!window.__cefVrListener) {
-            window.addEventListener('message', function(ev){
-              try {
-                if (ev && ev.data && ev.data.type === 'cef-vr') {
-                  var s = ev.data.state || {};
-                  var p = s.hmd && s.hmd.pos; var q = s.hmd && s.hmd.quat;
-                  console.log('[cef-vr]', p, q);
-                }
-              } catch(e) {}
-            });
-            window.__cefVrListener = true;
-          }
-        } catch(e) {}
-      })();)JS", "", 0);
-    }
-
-    // Schedule postMessage sender
-    class VrTask : public CefTask {
-     public:
-      explicit VrTask(CefRefPtr<OffscreenClient> c) : client_(c) {}
-      void Execute() override {
-        CEF_REQUIRE_UI_THREAD();
-        if (!client_.get()) return;
-        auto br = client_->GetBrowser();
-        if (!br.get()) return;
-        auto frame = br->GetMainFrame();
-        if (!frame.get()) return;
-        // Dummy animated pose: small circle, tick-based
-        client_->v8_vr_tick_++;
-        double t = client_->v8_vr_tick_ * (client_->v8_vr_ms_ / 1000.0);
-        double r = 0.25;
-        double x = r * sin(t), y = 1.6, z = r * cos(t);
-        char js[512];
-        snprintf(js, sizeof(js),
-          "(function(){ try{ window.postMessage({type:'cef-vr', state:{hmd:{pos:[%f,%f,%f], quat:[0,0,0,1]}}}, '*'); }catch(e){} })();",
-          x, y, z);
-        frame->ExecuteJavaScript(js, "", 0);
-        // Re-schedule
-        CefPostDelayedTask(TID_UI, new VrTask(client_), client_->v8_vr_ms_);
-      }
-     private:
-      CefRefPtr<OffscreenClient> client_;
-      IMPLEMENT_REFCOUNTING(VrTask);
-    };
-    CefPostDelayedTask(TID_UI, new VrTask(this), v8_vr_ms_);
-  }
 
   // Real OpenVR pose -> page via iwerBridge.applyPose (browser-side injection)
   // Enabled with --iwer-apply-pose[=ms] (defaults to 11ms when vr_mode_)
@@ -393,11 +337,42 @@ void OffscreenClient::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
   
   static int paint_count = 0;
   paint_count++;
+  static auto first_paint_ts = std::chrono::steady_clock::now();
+  static auto last_paint_ts = first_paint_ts;
+  static auto last_report_ts = first_paint_ts;
+  static double worst_frame_ms = 0.0;
+
+  auto now = std::chrono::steady_clock::now();
+  double delta_s = std::chrono::duration<double>(now - last_paint_ts).count();
+  last_paint_ts = now;
+  if (delta_s > 0.0) {
+    double delta_ms = delta_s * 1000.0;
+    if (delta_ms > worst_frame_ms) {
+      worst_frame_ms = delta_ms;
+    }
+  }
   
   if (paint_count <= 10 || paint_count % 60 == 0) {
     std::cout << "[Client] OnAcceleratedPaint #" << paint_count << " - Handle: " << info.shared_texture_handle 
               << ", Size: " << width_ << "x" << height_ << ", Format: " << info.format << "\n";
     std::cout << "[Client] Dirty rects count: " << dirty_rects.size() << "\n";
+  }
+
+  const bool interval_report = (paint_count % 120) == 0;
+  const bool time_report = (std::chrono::duration<double>(now - last_report_ts).count() >= 5.0);
+  if (paint_count == 1 || interval_report || time_report) {
+    double total_s = std::chrono::duration<double>(now - first_paint_ts).count();
+    double avg_hz = total_s > 0.0 ? static_cast<double>(paint_count) / total_s : 0.0;
+    double avg_ms = avg_hz > 0.0 ? 1000.0 / avg_hz : 0.0;
+    double last_ms = delta_s > 0.0 ? delta_s * 1000.0 : 0.0;
+    std::cout << std::fixed << std::setprecision(2)
+              << "[Client] Frame stats: total=" << paint_count
+              << " avg=" << avg_hz << "Hz (" << avg_ms << "ms)"
+              << " last=" << last_ms << "ms"
+              << " worst=" << worst_frame_ms << "ms"
+              << " dirty=" << dirty_rects.size()
+              << std::defaultfloat << "\n";
+    last_report_ts = now;
   }
   
   got_accel_.store(true, std::memory_order_relaxed);
