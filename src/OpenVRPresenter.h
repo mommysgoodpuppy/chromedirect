@@ -14,13 +14,14 @@
 // - Create/find and configure an OpenVR overlay
 // - Submit a legacy DXGI shared-handle texture each frame
 
-class OpenVRPresenter : public Presenter {
+class OpenVRPresenter : public Presenter
+{
 public:
   OpenVRPresenter();
   ~OpenVRPresenter();
 
   // Initialize presenter and overlay. Non-throwing; returns false on failure.
-  bool Initialize(const char* overlay_key, int width, int height, float scale = 1.0f);
+  bool Initialize(const char *overlay_key, int width, int height, float scale = 1.0f);
 
   // Update cached size and overlay physical width-in-meters (scale).
   void Resize(int width, int height, float scale) override;
@@ -52,16 +53,16 @@ private:
   // D3D11 device/context used for interop and copies.
   Microsoft::WRL::ComPtr<ID3D11Device> device_;
   Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
-  
+
   // Overlay identification and handle.
   vr::VROverlayHandle_t overlay_handle_;
   std::string overlay_key_;
-  
+
   // Source texture dimensions and overlay physical width scale (meters).
   int width_;
   int height_;
   float scale_;
-  
+
   std::mutex mtx_;
   bool openvr_initialized_;
   bool overlay_created_;
@@ -73,6 +74,10 @@ private:
   Microsoft::WRL::ComPtr<ID3D11Texture2D> shared_legacy_tex_;
   D3D11_TEXTURE2D_DESC shared_legacy_desc_ = {};
   HANDLE shared_legacy_handle_ = nullptr;
+
+  // Reusable copy texture when the source is MSAA or not SRV-capable to avoid per-frame CreateTexture2D churn.
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> copy_tex_;
+  D3D11_TEXTURE2D_DESC copy_desc_ = {};
 
   // Optional: render into shared_legacy_tex_ via a shader pipeline
   bool shader_enabled_ = false;
