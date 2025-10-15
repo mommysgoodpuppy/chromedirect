@@ -357,6 +357,11 @@ bool OpenVRPresenter::EnsureShaderPipeline(UINT outWidth, UINT outHeight)
                  (shared_legacy_desc_.Height != outHeight);
   if (needTex)
   {
+    if (shared_legacy_handle_)
+    {
+      CloseHandle(shared_legacy_handle_);
+      shared_legacy_handle_ = nullptr;
+    }
     shared_legacy_tex_.Reset();
     shared_rtv_.Reset();
     shared_legacy_handle_ = nullptr;
@@ -657,7 +662,7 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     context_->VSSetShader(vs_.Get(), nullptr, 0);
     context_->PSSetShader(ps_.Get(), nullptr, 0);
     context_->PSSetSamplers(0, 1, sampler_.GetAddressOf());
-  context_->PSSetShaderResources(0, 1, &srvRaw);
+    context_->PSSetShaderResources(0, 1, &srvRaw);
 
     // Update constants (supply a yaw-only look rotation from HMD if available)
     D3D11_MAPPED_SUBRESOURCE map = {};
@@ -750,6 +755,9 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     context_->PSSetSamplers(0, 1, nullSampler);
     ID3D11RenderTargetView *nullRtv[1] = {nullptr};
     context_->OMSetRenderTargets(1, nullRtv, nullptr);
+    context_->VSSetShader(nullptr, nullptr, 0);
+    context_->PSSetShader(nullptr, nullptr, 0);
+    context_->ClearState();
   }
 
   // Visibility check
@@ -817,6 +825,10 @@ void OpenVRPresenter::Cleanup()
 
   // Release shared legacy resources
   shared_legacy_tex_.Reset();
+  if (shared_legacy_handle_)
+  {
+    CloseHandle(shared_legacy_handle_);
+  }
   shared_legacy_handle_ = nullptr;
   ZeroMemory(&shared_legacy_desc_, sizeof(shared_legacy_desc_));
   last_submitted_texture_.Reset();
