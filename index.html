@@ -1,116 +1,116 @@
 <!DOCTYPE html>
 <html>
-    <head>
-        <title>WebXR IWER Stereo Demo</title>
-        <script src="https://unpkg.com/iwer@latest/build/iwer.min.js"></script>
-        <script
-            src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"
-        ></script>
-        <style>
-            body {
-                margin: 0;
-                overflow: hidden;
-                background: transparent;
-            }
-            canvas {
-                width: 100%;
-                height: 100%;
-            }
-        </style>
-    </head>
-    <body>
-        <script>
-            // Initialize IWER
-            console.log("[index] Creating XRDevice...");
-            const xrDevice = new IWER.XRDevice(
-                IWER.metaQuest3,
-                {
-                    referenceSpaceType: "local-floor",
-                },
-            );
-            xrDevice.installRuntime();
-            console.log("[index] IWER runtime installed");
+  <head>
+    <title>WebXR IWER Stereo Demo</title>
+    <script src="https://unpkg.com/iwer@latest/build/iwer.min.js"></script>
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"
+    ></script>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+      }
+      canvas {
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      // Initialize IWER
+      console.log("[index] Creating XRDevice...");
+      const xrDevice = new IWER.XRDevice(
+        IWER.metaQuest3,
+        {
+          referenceSpaceType: "local-floor",
+        },
+      );
+      xrDevice.installRuntime();
+      console.log("[index] IWER runtime installed");
 
-            // Configure stereo rendering
-            xrDevice.stereoEnabled = true;
-            xrDevice.ipd = 0.0068;
+      // Configure stereo rendering
+      xrDevice.stereoEnabled = true;
+      xrDevice.ipd = 0.0068;
 
-            // Three.js setup
-            const scene = new THREE.Scene();
-            const renderer = new THREE.WebGLRenderer({
-                antialias: true,
-                alpha: true,
-            });
+      // Three.js setup
+      const scene = new THREE.Scene();
+      const renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true,
+      });
 
-            renderer.xr.enabled = true;
-            renderer.setClearColor(0x000000, 0);
-            document.body.appendChild(renderer.domElement);
+      renderer.xr.enabled = true;
+      renderer.setClearColor(0x000000, 0);
+      document.body.appendChild(renderer.domElement);
 
-            // Create proper camera configuration
-            const camera = new THREE.PerspectiveCamera();
+      // Create proper camera configuration
+      const camera = new THREE.PerspectiveCamera();
 
-            // Add lighting
-            const light = new THREE.DirectionalLight(
-                0xffffff,
-                1,
-            );
-            light.position.set(1, 1, 1);
-            scene.add(light);
-            scene.add(new THREE.AmbientLight(0x404040));
+      // Add lighting
+      const light = new THREE.DirectionalLight(
+        0xffffff,
+        1,
+      );
+      light.position.set(1, 1, 1);
+      scene.add(light);
+      scene.add(new THREE.AmbientLight(0x404040));
 
-            // Add test object
-            const geometry = new THREE.BoxGeometry();
-            const material = new THREE.MeshStandardMaterial({
-                color: 0x00ff00,
-            });
-            const cube = new THREE.Mesh(geometry, material);
-            scene.add(cube);
-            cube.position.z = -2;
-            cube.position.y = 2;
+      // Add test object
+      const geometry = new THREE.BoxGeometry();
+      const material = new THREE.MeshStandardMaterial({
+        color: 0x00ff00,
+      });
+      const cube = new THREE.Mesh(geometry, material);
+      scene.add(cube);
+      cube.position.z = -2;
+      cube.position.y = 2;
 
-            // Bind native WebXR device
-            window.cefExt.webxr.setDevice(xrDevice);
+      // Bind native WebXR device
+      window.cefExt.webxr.setDevice(xrDevice);
 
-            function xrRenderLoop(timestamp, frame) {
-                renderer.render(scene, camera);
-                cube.rotation.y += 0.0001;
-            }
+      function xrRenderLoop(timestamp, frame) {
+        renderer.render(scene, camera);
+        cube.rotation.y += 0.0001;
+      }
 
-            async function startXrSession() {
-                const session = await navigator.xr
-                    .requestSession("immersive-ar", {
-                        requiredFeatures: ["local-floor"],
-                    });
-                console.log("[index] XR session started");
+      async function startXrSession() {
+        const session = await navigator.xr
+          .requestSession("immersive-ar", {
+            requiredFeatures: ["local-floor"],
+          });
+        console.log("[index] XR session started");
 
-                session.addEventListener("end", () => {
-                    console.log("[index] XR Session Ended");
-                    renderer.setAnimationLoop(null);
-                });
+        session.addEventListener("end", () => {
+          console.log("[index] XR Session Ended");
+          renderer.setAnimationLoop(null);
+        });
 
-                const gl = renderer.getContext();
-                await gl.makeXRCompatible();
-                const baseLayer = new XRWebGLLayer(
-                    session,
-                    gl,
-                    {
-                        antialias: true,
-                        alpha: false,
-                        depth: false,
-                        stencil: false,
-                    },
-                );
-                session.updateRenderState({ baseLayer });
+        const gl = renderer.getContext();
+        await gl.makeXRCompatible();
+        const baseLayer = new XRWebGLLayer(
+          session,
+          gl,
+          {
+            antialias: true,
+            alpha: false,
+            depth: false,
+            stencil: false,
+          },
+        );
+        session.updateRenderState({ baseLayer });
 
-                await renderer.xr.setSession(session);
-                renderer.setAnimationLoop(xrRenderLoop);
-                console.log("[index] Animation loop set");
-            }
+        await renderer.xr.setSession(session);
+        renderer.setAnimationLoop(xrRenderLoop);
+        console.log("[index] Animation loop set");
+      }
 
-            // Auto-start XR session after IWER installs the runtime
-            Promise.resolve().then(() => startXrSession());
+      // Auto-start XR session after IWER installs the runtime
+      Promise.resolve().then(() => startXrSession());
 
-            renderer.render(scene, camera);
-        </script>
-    </body>
+      renderer.render(scene, camera);
+    </script>
+  </body>
 </html>
