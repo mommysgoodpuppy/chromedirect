@@ -21,7 +21,7 @@
   <body>
     <script>
       //#region IWER Setup
-      // Initialize IWER
+
       console.log("[index] Creating XRDevice...");
       const xrDevice = new IWER.XRDevice(
         IWER.metaQuest3,
@@ -72,16 +72,7 @@
       cube.position.y = 2;
       //#endregion
 
-      //#region CEF Extension
-      // Bind native WebXR device
       window.cefExt.webxr.setDevice(xrDevice);
-      //#endregion
-
-      //#region XR Session & Render Loop
-      function xrRenderLoop(timestamp, frame) {
-        renderer.render(scene, camera);
-        cube.rotation.y += 0.0001;
-      }
 
       async function startXrSession() {
         const session = await navigator.xr
@@ -118,7 +109,11 @@
       Promise.resolve().then(() => startXrSession());
 
       renderer.render(scene, camera);
-      //#endregion
+
+      function xrRenderLoop(timestamp, frame) {
+        renderer.render(scene, camera);
+        cube.rotation.y += 0.0001;
+      }
     </script>
   </body>
 </html>
