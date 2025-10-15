@@ -18,16 +18,6 @@ type Args = {
   exe: string;
   vrMode: boolean;
   fps?: number;
-  shaderPanorama?: boolean;
-  stereoPanoramaFlag?: boolean;
-  fovDeg?: number;
-  shaderDebug?: string;
-  debugIwerHeartbeat?: number; // ms; if set, enables heartbeat
-  disableIwerExtension?: boolean; // if true, do not inject iwer extension
-  v8Ping?: number; // ms; if set, pings page via ExecuteJavaScript
-  v8PostVr?: number; // ms; if set, posts dummy VR state to page
-  enableIwerBridge?: boolean; // enable pose bridge
-  iwerApplyPose?: number; // ms; browser-side applyPose timer
 };
 
 function parseArgs(): Args {
@@ -79,36 +69,6 @@ function parseArgs(): Args {
         out.fps = Math.max(1, Number(v) || 120);
         fpsExplicit = true;
         break;
-      case "shader-panorama":
-        out.shaderPanorama = v === "true" || v === "1";
-        break;
-      case "overlay-stereo-panorama":
-        out.stereoPanoramaFlag = v === "true" || v === "1";
-        break;
-      case "fov-deg":
-        out.fovDeg = Math.max(1, Number(v) || 90);
-        break;
-      case "shader-debug":
-        out.shaderDebug = v;
-        break;
-      case "debug-iwer-heartbeat":
-        out.debugIwerHeartbeat = Math.max(50, Number(v) || 2000);
-        break;
-      case "disable-iwer-extension":
-        out.disableIwerExtension = v === "1" || v === "true";
-        break;
-      case "v8-ping":
-        out.v8Ping = Math.max(50, Number(v) || 1000);
-        break;
-      case "v8-post-vr":
-        out.v8PostVr = Math.max(50, Number(v) || 1000);
-        break;
-      case "enable-iwer-bridge":
-        out.enableIwerBridge = v === "1" || v === "true" || v === "";
-        break;
-      case "iwer-apply-pose":
-        out.iwerApplyPose = Math.max(5, Number(v) || 11);
-        break;
       case "vr-mode": {
         const val = v.toLowerCase();
         out.vrMode = v === ""
@@ -136,10 +96,6 @@ function parseArgs(): Args {
       ? `file:///${path.replace(/\\/g, "/")}`
       : `file://${path}`;
     out.url = fileUrl;
-  }
-  // Default heartbeat ON at 2000ms if not specified
-  if (!("debugIwerHeartbeat" in out)) {
-    out.debugIwerHeartbeat = 2000;
   }
   return out;
 }
@@ -213,8 +169,8 @@ function initOverlay(key: string, scale: number) {
   return { overlay, overlayHandle };
 }
 
-async function spawnHost(exe: string, args: Args) {
-  // C++ currently uses defaults; we still pass helpful flags for future-proofing
+function spawnHost(exe: string, args: Args) {
+  // Pass essential flags to the C++ host
   const params = [
     `--vr-mode=${args.vrMode ? "true" : "false"}`,
     `--width=${args.width}`,
@@ -222,18 +178,7 @@ async function spawnHost(exe: string, args: Args) {
     `--scale=${args.scale}`,
     `--overlay-key=${args.key}`,
     `--url=${args.url}`,
-    `--debug-iwer-heartbeat=${args.debugIwerHeartbeat}`,
-    ...(args.disableIwerExtension ? ["--disable-iwer-extension"] : []),
-    ...(args.v8Ping ? [`--v8-ping=${args.v8Ping}`] : []),
-    ...(args.v8PostVr ? [`--v8-post-vr=${args.v8PostVr}`] : []),
-    ...(args.enableIwerBridge ? ["--enable-iwer-bridge"] : []),
-    ...(args.iwerApplyPose ? [`--iwer-apply-pose=${args.iwerApplyPose}`] : []),
     ...(args.fps ? [`--fps=${args.fps}`] : []),
-    ...(args.shaderPanorama ? ["--shader-panorama=true"] : []),
-    ...(args.stereoPanoramaFlag ? ["--overlay-stereo-panorama=true"] : []),
-    ...(args.fovDeg ? [`--fov-deg=${args.fovDeg}`] : []),
-    ...(args.shaderDebug ? [`--shader-debug=${args.shaderDebug}`] : []),
-    `--log-console`,
   ];
   const cmd = new Deno.Command(exe, {
     args: params,
@@ -243,7 +188,7 @@ async function spawnHost(exe: string, args: Args) {
   const child = cmd.spawn();
   (async () => {
     const r = child.stdout.getReader();
-    const dec = new TextDecoder();
+    const _dec = new TextDecoder();
     while (true) {
       const { value, done } = await r.read();
       if (done) break;
@@ -290,8 +235,8 @@ if (import.meta.main) {
       });
       const start = performance.now();
       while (running) {
-        const now = performance.now();
-        const t = (now - start) / 1000;
+        const _now = performance.now();
+        const _t = (_now - start) / 1000;
         /* try {
           setOverlayTransformAnimated(overlay, overlayHandle, t);
         } catch (e) {
