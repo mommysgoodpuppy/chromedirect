@@ -191,11 +191,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     const std::string v = app_cmd->GetSwitchValue("vr-mode").ToString();
     g_enable_vr_mode = parse_bool_switch(v, true);
   }
-  else if (app_cmd->HasSwitch("vr"))
-  {
-    const std::string v = app_cmd->GetSwitchValue("vr").ToString();
-    g_enable_vr_mode = parse_bool_switch(v, true);
-  }
 
   if (g_enable_vr_mode)
   {

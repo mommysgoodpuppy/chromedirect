@@ -73,11 +73,6 @@ function parseArgs(): Args {
         out.vrMode = v === "" ? true : !(val === "0" || val === "false" || val === "no");
         break;
       }
-      case "vr": {
-        const val = v.toLowerCase();
-        out.vrMode = v === "" ? true : !(val === "0" || val === "false" || val === "no");
-        break;
-      }
     }
   }
   if (out.vrMode) {
