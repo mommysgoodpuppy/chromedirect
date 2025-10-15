@@ -16,24 +16,9 @@
                 width: 100%;
                 height: 100%;
             }
-            #xr-button {
-                position: absolute;
-                top: 20px;
-                left: 50%;
-                transform: translateX(-50%);
-                padding: 12px 24px;
-                z-index: 999;
-            }
         </style>
     </head>
     <body>
-        <button id="xr-button">Enter XR</button>
-        <div
-            id="status"
-            style="position: absolute; top: 60px; left: 50%; transform: translateX(-50%); padding: 8px 12px; background: #607d8b; color: white; font-family: system-ui, sans-serif; border-radius: 6px; z-index: 999"
-        >
-            Idle
-        </div>
         <script>
             // Initialize IWER
             console.log("[index] Creating XRDevice...");
@@ -104,7 +89,6 @@
             cube.position.y = 2;
 
             // XR Session handling (auto-start capable via IWER polyfill)
-            const statusEl = document.getElementById("status");
             const params = new URLSearchParams(location.search);
             let webxrBound = false;
             let webxrRetryTimer = null;
@@ -192,9 +176,7 @@
 
             async function startXrSession() {
                 if (!navigator.xr) {
-                    statusEl.textContent =
-                        "WebXR not supported!";
-                    statusEl.style.backgroundColor = "#F44336";
+                    console.error("WebXR not supported!");
                     return;
                 }
                 if (
@@ -202,9 +184,9 @@
                         "immersive-vr",
                     )
                 ) {
-                    statusEl.textContent =
-                        "Immersive VR not supported!";
-                    statusEl.style.backgroundColor = "#F44336";
+                    console.error(
+                        "Immersive VR not supported!",
+                    );
                     return;
                 }
 
@@ -221,15 +203,10 @@
                         .requestSession("immersive-ar", {
                             requiredFeatures: ["local-floor"],
                         });
-                    statusEl.textContent = "XR Session Active";
-                    statusEl.style.backgroundColor = "#2196F3";
                     console.log("[index] XR session started");
 
                     session.addEventListener("end", () => {
-                        statusEl.textContent =
-                            "XR Session Ended";
-                        statusEl.style.backgroundColor =
-                            "#607D8B";
+                        console.log("[index] XR Session Ended");
                         renderer.setAnimationLoop(null);
                         const webxrWasActive = webxrBound;
                         const handle = getWebXRHandle();
@@ -292,19 +269,10 @@
                     console.log("[index] Animation loop set");
                 } catch (err) {
                     console.error("XR session failed:", err);
-                    statusEl.textContent = `XR Error: ${
-                        err && err.message ? err.message : err
-                    }`;
-                    statusEl.style.backgroundColor = "#F44336";
                 }
             }
 
-            // Manual button entry and auto-start attempt
-            document.getElementById("xr-button")
-                .addEventListener("click", () => {
-                    startXrSession();
-                });
-            // Kick off automatically after IWER installs the runtime
+            // Auto-start XR session after IWER installs the runtime
             Promise.resolve().then(() => startXrSession());
 
             // Handle window resize
