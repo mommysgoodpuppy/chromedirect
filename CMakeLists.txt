@@ -68,6 +68,8 @@ set(APP_SOURCES
   src/RendererBridge.cpp
   src/MinimalRenderHandler.h
   src/MinimalRenderHandler.cpp
+  src/CefAppHandlers.h
+  src/CefAppHandlers.cpp
 )
 
 # Create the executable target
