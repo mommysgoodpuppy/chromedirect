@@ -631,61 +631,12 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     }
   }
 
-  if (!shader_enabled_)
+  // Shader path: render SBS -> stereo panorama into shared_legacy_tex_
+  // Create SRV for submitTex (let D3D infer view desc)
+  ComPtr<ID3D11ShaderResourceView> srv;
+  HRESULT hrs = device_->CreateShaderResourceView(submitTex.Get(), nullptr, srv.GetAddressOf());
+  if (SUCCEEDED(hrs))
   {
-    // Copy path (previous behavior)
-    const bool sizeChanged = (shared_legacy_tex_ == nullptr) ||
-                             (shared_legacy_desc_.Width != submitDesc.Width) ||
-                             (shared_legacy_desc_.Height != submitDesc.Height) ||
-                             (shared_legacy_desc_.Format != submitDesc.Format);
-    if (sizeChanged)
-    {
-      shared_legacy_tex_.Reset();
-      shared_legacy_handle_ = nullptr;
-      shared_legacy_desc_ = submitDesc;
-      shared_legacy_desc_.MiscFlags = D3D11_RESOURCE_MISC_SHARED;  // legacy shared handle
-      shared_legacy_desc_.BindFlags |= D3D11_BIND_SHADER_RESOURCE; // ensure SRV-capable
-      HRESULT hrShare = device_->CreateTexture2D(&shared_legacy_desc_, nullptr, shared_legacy_tex_.GetAddressOf());
-      if (FAILED(hrShare))
-      {
-        std::cerr << "[OpenVR] ERROR: Failed to create/recreate legacy-shared texture, hr=0x" << std::hex << hrShare << std::dec << "\n";
-        // Fall back to direct pointer submission
-        last_submitted_texture_ = submitTex;
-        vr::Texture_t eyeTexture = {(void *)submitTex.Get(), vr::TextureType_DirectX, vr::ColorSpace_Auto};
-        vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
-        if (overlayError != vr::VROverlayError_None)
-        {
-          std::cerr << "[OpenVR] ERROR: SetOverlayTexture failed: " << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
-        }
-        else if (present_count <= 5)
-        {
-          std::cout << "[OpenVR] Texture submitted to overlay successfully (direct pointer fallback)\n";
-        }
-        goto post_submit_visibility_check;
-      }
-      // Fetch shared handle once
-      ComPtr<IDXGIResource> dxgiRes;
-      if (SUCCEEDED(shared_legacy_tex_.As(&dxgiRes)))
-      {
-        dxgiRes->GetSharedHandle(&shared_legacy_handle_);
-      }
-    }
-    context_->CopyResource(shared_legacy_tex_.Get(), submitTex.Get());
-    context_->Flush();
-    last_submitted_texture_ = shared_legacy_tex_;
-  }
-  else
-  {
-    // Shader path: render SBS -> stereo panorama into shared_legacy_tex_
-    // Create SRV for submitTex (let D3D infer view desc)
-    ComPtr<ID3D11ShaderResourceView> srv;
-    HRESULT hrs = device_->CreateShaderResourceView(submitTex.Get(), nullptr, srv.GetAddressOf());
-    if (FAILED(hrs))
-    {
-      std::cerr << "[OpenVR] ERROR: Create SRV failed, hr=0x" << std::hex << hrs << std::dec << "\n";
-      goto post_submit_visibility_check;
-    }
-
     context_->OMSetRenderTargets(1, shared_rtv_.GetAddressOf(), nullptr);
     context_->RSSetViewports(1, &viewport_);
     context_->IASetInputLayout(nullptr);
@@ -766,24 +717,28 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     }
 
     last_submitted_texture_ = shared_legacy_tex_;
-  }
 
-  if (shared_legacy_handle_)
+    if (shared_legacy_handle_)
+    {
+      vr::Texture_t eyeTexture = {(void *)shared_legacy_handle_, vr::TextureType_DXGISharedHandle, vr::ColorSpace_Auto};
+      vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
+      if (overlayError != vr::VROverlayError_None)
+      {
+        std::cerr << "[OpenVR] ERROR: SetOverlayTexture (DXGISharedHandle) failed: "
+                  << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
+      }
+      else if (present_count <= 5)
+      {
+        std::cout << "[OpenVR] Texture submitted to overlay successfully (DXGI shared handle)\n";
+      }
+    }
+  }
+  else
   {
-    vr::Texture_t eyeTexture = {(void *)shared_legacy_handle_, vr::TextureType_DXGISharedHandle, vr::ColorSpace_Auto};
-    vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
-    if (overlayError != vr::VROverlayError_None)
-    {
-      std::cerr << "[OpenVR] ERROR: SetOverlayTexture (DXGISharedHandle) failed: "
-                << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
-    }
-    else if (present_count <= 5)
-    {
-      std::cout << "[OpenVR] Texture submitted to overlay successfully (DXGI shared handle)\n";
-    }
+    std::cerr << "[OpenVR] ERROR: Create SRV failed, hr=0x" << std::hex << hrs << std::dec << "\n";
   }
 
-post_submit_visibility_check:
+  // Visibility check
   if (present_count <= 3)
   {
     bool visible = vr::VROverlay()->IsOverlayVisible(overlay_handle_);

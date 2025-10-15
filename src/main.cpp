@@ -171,7 +171,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   std::string overlay_key = "cef.web.overlay";
   std::string start_url = "https://www.google.com";
   int target_fps = 60;
-  bool stereo_panorama_flag = false;
   float fov_deg = 90.0f; // total FOV; half used in shader
   bool warp_follow_head = false;
 
@@ -197,7 +196,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     height = 2000;
     target_fps = 120;
     scale_m = 3.0f;
-    stereo_panorama_flag = true;
     std::cout << "[CEF Demo] VR mode enabled (OpenVR presenter)" << std::endl;
   }
   else
@@ -211,7 +209,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   const bool cef_height_explicit = app_cmd->HasSwitch("cef-height");
   const bool scale_explicit = app_cmd->HasSwitch("scale");
   const bool fps_explicit = app_cmd->HasSwitch("fps");
-  const bool stereo_explicit = app_cmd->HasSwitch("overlay-stereo-panorama");
 
   if (width_explicit)
   {
@@ -252,11 +249,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   if (!scale_explicit && g_enable_vr_mode)
   {
     scale_m = 3.0f;
-  }
-  if (stereo_explicit)
-  {
-    const std::string v = app_cmd->GetSwitchValue("overlay-stereo-panorama");
-    stereo_panorama_flag = (v.empty() || v == "1" || v == "true");
   }
   if (app_cmd->HasSwitch("fov-deg"))
   {
@@ -379,11 +371,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
       return -1;
     }
     std::cout << "[CEF Demo] OpenVR presenter initialized successfully\n";
-    if (stereo_panorama_flag)
-    {
-      vr_presenter->SetStereoPanorama(true);
-      std::cout << "[CEF Demo] Overlay flag: StereoPanorama enabled\n";
-    }
     // In VR mode, always enable shader panorama
     float fov_half_rad = (fov_deg * 0.5f) * 3.1415926535f / 180.0f;
     vr_presenter->ConfigurePanoramaShader(true, fov_half_rad);
