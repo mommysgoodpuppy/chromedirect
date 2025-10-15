@@ -208,18 +208,7 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
             ToPosQuat(poses[i].mDeviceToAbsoluteTracking, rPos, rQuat);
           }
         }
-        const bool sent = client_->SendPoseToRenderer(frame, hPos, hQuat, lPos, lQuat, rPos, rQuat);
-        if (!sent)
-        {
-          // Fallback to direct JS injection when the native bridge is disabled.
-          char js[1024];
-          snprintf(js, sizeof(js),
-                   "(function(){try{ if(window.iwerBridge&&typeof iwerBridge.applyPose==='function'){ iwerBridge.applyPose({hmd:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}, left:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}, right:{pos:[%f,%f,%f], quat:[%f,%f,%f,%f]}}); } }catch(e){} })();",
-                   hPos[0], hPos[1], hPos[2], hQuat[0], hQuat[1], hQuat[2], hQuat[3],
-                   lPos[0], lPos[1], lPos[2], lQuat[0], lQuat[1], lQuat[2], lQuat[3],
-                   rPos[0], rPos[1], rPos[2], rQuat[0], rQuat[1], rQuat[2], rQuat[3]);
-          frame->ExecuteJavaScript(js, "", 0);
-        }
+        client_->SendPoseToRenderer(frame, hPos, hQuat, lPos, lQuat, rPos, rQuat);
         CefPostDelayedTask(TID_UI, this, ms_);
       }
 
