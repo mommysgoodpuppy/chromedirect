@@ -324,7 +324,8 @@ float4 main(PSIn i) : SV_Target {
 
   // Sample from SBS source: left half for left eye, right half for right eye
   float sampledU = eyeUV.x * 0.5 + (renderTopHalf ? 0.0 : 0.5);
-  return srcTex.Sample(samp0, float2(sampledU, eyeUV.y));
+  float sampledV = 1.0 - eyeUV.y;
+  return srcTex.Sample(samp0, float2(sampledU, sampledV));
 }
 )HLSL";
 
@@ -710,7 +711,10 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
       for (int r = 0; r < 4; ++r)
         for (int c = 0; c < 4; ++c)
           dst[r * 4 + c] = (r == c) ? 1.0f : 0.0f;
-      // Query HMD pose and generate inverse yaw rotation if enabled
+      // Query HMD pose and generate full inverse rotation with Z-flip if enabled
+      // This matches the old TypeScript version:
+      // 1. Take 3x3 rotation (transpose to get inverse for rotation matrix)
+      // 2. Scale by [1, 1, -1] to flip Z axis
       bool appliedRotation = false;
       if (warp_follow_head_ && vr::VRSystem())
       {
@@ -720,27 +724,27 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
         if (hmdPose.bPoseIsValid)
         {
           const vr::HmdMatrix34_t &m = hmdPose.mDeviceToAbsoluteTracking;
-          // Extract yaw from 3x3 rotation (assuming column-major from OpenVR)
-          // OpenVR's 3x4 matrix m: rows 0..2, cols 0..3
-          // Forward Z axis components: m[2][0], m[2][2]
-          float forwardX = m.m[0][2];
-          float forwardZ = m.m[2][2];
-          float yaw = atan2f(forwardX, forwardZ);
-          float cy = cosf(-yaw); // inverse yaw
-          float sy = sinf(-yaw);
-          // Row-major 4x4
-          dst[0] = cy;
-          dst[1] = 0.0f;
-          dst[2] = sy;
+          // OpenVR matrix is row-major: m[row][col]
+          // To invert a rotation matrix, we transpose it
+          // Then apply scale [1, 1, -1] to flip Z
+
+          // Transpose (inverse) of rotation matrix, column-major layout for HLSL
+          // Column 0 (X axis)
+          dst[0] = m.m[0][0]; // transposed [0][0]
+          dst[1] = m.m[0][1]; // transposed [1][0]
+          dst[2] = m.m[0][2]; // transposed [2][0]
           dst[3] = 0.0f;
-          dst[4] = 0.0f;
-          dst[5] = 1.0f;
-          dst[6] = 0.0f;
+          // Column 1 (Y axis)
+          dst[4] = m.m[1][0]; // transposed [0][1]
+          dst[5] = m.m[1][1]; // transposed [1][1]
+          dst[6] = m.m[1][2]; // transposed [2][1]
           dst[7] = 0.0f;
-          dst[8] = -sy;
-          dst[9] = 0.0f;
-          dst[10] = cy;
+          // Column 2 (Z axis) - flip sign for [1, 1, -1] scale
+          dst[8] = -m.m[2][0];  // transposed [0][2], negated
+          dst[9] = -m.m[2][1];  // transposed [1][2], negated
+          dst[10] = -m.m[2][2]; // transposed [2][2], negated
           dst[11] = 0.0f;
+          // Column 3 (W/translation)
           dst[12] = 0.0f;
           dst[13] = 0.0f;
           dst[14] = 0.0f;
