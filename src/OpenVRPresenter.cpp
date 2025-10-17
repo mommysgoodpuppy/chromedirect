@@ -160,12 +160,16 @@ bool OpenVRPresenter::InitializeOpenVR()
     bounds.vMax = 1.0f;
     vr::VROverlay()->SetOverlayTextureBounds(overlay_handle_, &bounds);
 
+    // Configure panorama flags to match SBS -> stereo panorama shader output
+    vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_Panorama, false);
+    vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_StereoPanorama, true);
+
     // Make overlay visible
     vr::VROverlay()->ShowOverlay(overlay_handle_);
 
     std::cout << "[OpenVR] Overlay configured: width=" << scale_ << "m, bounds set, visible\n";
 
-    // Position it in front of the user
+    // Position relative to HMD (HUD-like), ~1m forward to reduce parallax
     vr::HmdMatrix34_t transform = {};
     transform.m[0][0] = 1.0f;
     transform.m[0][1] = 0.0f;
@@ -174,16 +178,43 @@ bool OpenVRPresenter::InitializeOpenVR()
     transform.m[1][0] = 0.0f;
     transform.m[1][1] = 1.0f;
     transform.m[1][2] = 0.0f;
-    transform.m[1][3] = 1.0f;
+    transform.m[1][3] = 0.0f;
     transform.m[2][0] = 0.0f;
     transform.m[2][1] = 0.0f;
     transform.m[2][2] = 1.0f;
-    transform.m[2][3] = -2.0f;
-    vr::VROverlay()->SetOverlayTransformAbsolute(overlay_handle_, vr::TrackingUniverseStanding, &transform);
+    transform.m[2][3] = -1.0f;
+    vr::VROverlay()->SetOverlayTransformTrackedDeviceRelative(
+        overlay_handle_, vr::k_unTrackedDeviceIndex_Hmd, &transform);
   }
   else
   {
     std::cout << "[OpenVR] Found existing overlay with handle: " << overlay_handle_ << "\n";
+    // Ensure flags and bounds are correct even for existing overlays
+    vr::VRTextureBounds_t bounds;
+    bounds.uMin = 0.0f;
+    bounds.vMin = 0.0f;
+    bounds.uMax = 1.0f;
+    bounds.vMax = 1.0f;
+    vr::VROverlay()->SetOverlayTextureBounds(overlay_handle_, &bounds);
+    vr::VROverlay()->SetOverlayWidthInMeters(overlay_handle_, scale_);
+    vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_Panorama, false);
+    vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_StereoPanorama, true);
+    // Keep it HMD-relative at -1m Z
+    vr::HmdMatrix34_t transform = {};
+    transform.m[0][0] = 1.0f;
+    transform.m[0][1] = 0.0f;
+    transform.m[0][2] = 0.0f;
+    transform.m[0][3] = 0.0f;
+    transform.m[1][0] = 0.0f;
+    transform.m[1][1] = 1.0f;
+    transform.m[1][2] = 0.0f;
+    transform.m[1][3] = 0.0f;
+    transform.m[2][0] = 0.0f;
+    transform.m[2][1] = 0.0f;
+    transform.m[2][2] = 1.0f;
+    transform.m[2][3] = -1.0f;
+    vr::VROverlay()->SetOverlayTransformTrackedDeviceRelative(
+        overlay_handle_, vr::k_unTrackedDeviceIndex_Hmd, &transform);
   }
 
   // Show the overlay
@@ -191,6 +222,16 @@ bool OpenVRPresenter::InitializeOpenVR()
   overlay_created_ = true;
 
   return true;
+}
+
+void OpenVRPresenter::SetStereoPanorama(bool enable)
+{
+  std::lock_guard<std::mutex> lock(mtx_);
+  if (!overlay_created_)
+    return;
+  // Mirror old pipeline: StereoPanorama true, Panorama false when enabled
+  vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_Panorama, enable ? false : true);
+  vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_StereoPanorama, enable);
 }
 
 void OpenVRPresenter::SetFOVHalfRadians(float fovHalfRadians)
@@ -239,7 +280,7 @@ Texture2D srcTex : register(t0);
 SamplerState samp0 : register(s0);
 
 cbuffer Params : register(b0) {
-  float4x4 lookRotation; // view rotation
+  row_major float4x4 lookRotation; // view rotation
   float halfFOVInRadians;
   float applyRotation; // 0=no, 1=yes
   float2 pad;
@@ -251,7 +292,6 @@ static const float QUARTER_PI = 0.25 * PI;
 
 struct PSIn { float4 pos:SV_Position; float2 uv:TEXCOORD0; };
 float4 main(PSIn i) : SV_Target {
-  // VS already provided normalized UV with V flipped
   float2 uv = i.uv;
 
   float2 xy = uv;
@@ -273,7 +313,7 @@ float4 main(PSIn i) : SV_Target {
 
   // Optional look rotation
   if (applyRotation > 0.5) {
-    dir = mul(float4(dir,0.0), lookRotation).xyz;
+  dir = mul(float4(dir,0.0), lookRotation).xyz;
   }
 
   float projX = (dir.x / abs(dir.z)) / fovScalar;

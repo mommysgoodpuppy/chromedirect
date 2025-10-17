@@ -81,8 +81,10 @@ private:
   Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> copy_srv_;
 
   // Shader pipeline for rendering into shared_legacy_tex_
-  float fov_half_radians_ = 0.78539816339f; // ~45 deg
-  bool warp_follow_head_ = false;
+  // Default to ~56 degrees half-FOV (matches prior pipeline: 112° vertical FOV total)
+  float fov_half_radians_ = 0.9773843811168246f; // 56 deg in radians
+  // Follow HMD yaw by default to keep panorama stable relative to the overlay (HUD-like)
+  bool warp_follow_head_ = true;
   Microsoft::WRL::ComPtr<ID3D11VertexShader> vs_;
   Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_;
   Microsoft::WRL::ComPtr<ID3D11Buffer> cb_params_;
