@@ -294,8 +294,9 @@ struct PSIn { float4 pos:SV_Position; float2 uv:TEXCOORD0; };
 float4 main(PSIn i) : SV_Target {
   float2 uv = i.uv;
 
-  float2 xy = uv;
-  float2 xy_normalized = 2.0 * xy - 1.0;
+  // Match original GLSL shader's additional V flip before normalization
+  float2 xy_flipped = float2(uv.x, 1.0 - uv.y);
+  float2 xy_normalized = 2.0 * xy_flipped - 1.0;
   float2 xy_angles = xy_normalized * float2(PI, HALF_PI);
 
   float2 xy_eye_angles = xy_angles;
@@ -313,7 +314,7 @@ float4 main(PSIn i) : SV_Target {
 
   // Optional look rotation
   if (applyRotation > 0.5) {
-  dir = mul(float4(dir,0.0), lookRotation).xyz;
+    dir = mul(float4(dir,0.0), lookRotation).xyz;
   }
 
   float projX = (dir.x / abs(dir.z)) / fovScalar;
@@ -321,14 +322,9 @@ float4 main(PSIn i) : SV_Target {
   float2 eyeUV = float2((projX + 1.0) * 0.5, (projY + 1.0) * 0.5);
   eyeUV = saturate(eyeUV);
 
-  // Sample from SBS source: left half for top, right half for bottom
-  if (renderTopHalf) {
-    eyeUV.x = eyeUV.x * 0.5; // left half
-  } else {
-    eyeUV.x = eyeUV.x * 0.5 + 0.5; // right half
-  }
-
-  return srcTex.Sample(samp0, eyeUV);
+  // Sample from SBS source: left half for left eye, right half for right eye
+  float sampledU = eyeUV.x * 0.5 + (renderTopHalf ? 0.0 : 0.5);
+  return srcTex.Sample(samp0, float2(sampledU, eyeUV.y));
 }
 )HLSL";
 
