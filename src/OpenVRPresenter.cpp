@@ -72,6 +72,7 @@ bool OpenVRPresenter::Initialize(const char *overlay_key, int width, int height,
     viewport_.MaxDepth = 1.0f;
 
     std::cout << "[OpenVR] Initialize successful\n";
+    StartRenderLoop();
     return true;
   }
   catch (const std::exception &e)
@@ -160,7 +161,7 @@ bool OpenVRPresenter::InitializeOpenVR()
     bounds.vMax = 1.0f;
     vr::VROverlay()->SetOverlayTextureBounds(overlay_handle_, &bounds);
 
-    // Configure panorama flags to match SBS -> stereo panorama shader output
+    // We perform panorama mapping in our own shader; disable compositor panorama processing
     vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_Panorama, false);
     vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_StereoPanorama, true);
 
@@ -438,39 +439,6 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
 
   static int present_count = 0;
   present_count++;
-  static auto first_present_ts = std::chrono::steady_clock::now();
-  static auto last_present_ts = first_present_ts;
-  static auto last_report_ts = first_present_ts;
-  static double worst_present_ms = 0.0;
-
-  auto now = std::chrono::steady_clock::now();
-  double delta_s = std::chrono::duration<double>(now - last_present_ts).count();
-  last_present_ts = now;
-  if (delta_s > 0.0)
-  {
-    double delta_ms = delta_s * 1000.0;
-    if (delta_ms > worst_present_ms)
-    {
-      worst_present_ms = delta_ms;
-    }
-  }
-
-  const bool interval_report = (present_count % 120) == 0;
-  const bool time_report = (std::chrono::duration<double>(now - last_report_ts).count() >= 5.0);
-  if (present_count == 1 || interval_report || time_report)
-  {
-    double total_s = std::chrono::duration<double>(now - first_present_ts).count();
-    double avg_hz = total_s > 0.0 ? static_cast<double>(present_count) / total_s : 0.0;
-    double avg_ms = avg_hz > 0.0 ? 1000.0 / avg_hz : 0.0;
-    double last_ms = delta_s > 0.0 ? delta_s * 1000.0 : 0.0;
-    std::cout << std::fixed << std::setprecision(2)
-              << "[OpenVR] Submit stats: total=" << present_count
-              << " avg=" << avg_hz << "Hz (" << avg_ms << "ms)"
-              << " last=" << last_ms << "ms"
-              << " worst=" << worst_present_ms << "ms"
-              << std::defaultfloat << "\n";
-    last_report_ts = now;
-  }
 
   if (!device_ || !context_ || !openvr_initialized_ || !overlay_created_)
   {
@@ -484,7 +452,7 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     return;
   }
 
-  if (present_count <= 5 || present_count % 60 == 0)
+  if (present_count <= 3 || present_count % 120 == 0)
   {
     std::cout << "[OpenVR] PresentSharedHandle #" << present_count << " - Handle: " << shared_handle
               << ", Size: " << srcWidth << "x" << srcHeight << "\n";
@@ -561,8 +529,6 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
               << "\n";
   }
 
-  // (debug red texture scheduling removed)
-
   // Acquire keyed mutex if present (try key 0, then 1). Release with the same key we acquired.
   ComPtr<IDXGIKeyedMutex> keyedMutex;
   UINT64 acquiredKey = UINT64_MAX;
@@ -591,224 +557,54 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     }
   }
 
-  // Decide which texture to submit: ensure SRV-capable and non-MSAA
-  ComPtr<ID3D11Texture2D> submitTex = sharedTex;
-  bool needsCopy = (srcDesc.SampleDesc.Count > 1) || ((srcDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) == 0);
-  if (needsCopy)
+  // Always copy/resolve into our own SRV-capable single-sample texture for safe 120 Hz sampling
+  bool needNewStage = (!last_source_tex_) ||
+                      (copy_desc_.Width != srcDesc.Width) ||
+                      (copy_desc_.Height != srcDesc.Height) ||
+                      (copy_desc_.Format != srcDesc.Format);
+  if (needNewStage)
   {
-    // Reuse persistent copy texture to avoid per-frame allocations
-    bool needNewCopy = (!copy_tex_) ||
-                       (copy_desc_.Width != srcDesc.Width) ||
-                       (copy_desc_.Height != srcDesc.Height) ||
-                       (copy_desc_.Format != srcDesc.Format);
-    if (needNewCopy)
+    last_source_tex_.Reset();
+    last_source_srv_.Reset();
+    ZeroMemory(&copy_desc_, sizeof(copy_desc_));
+    copy_desc_.Width = srcDesc.Width;
+    copy_desc_.Height = srcDesc.Height;
+    copy_desc_.MipLevels = 1;
+    copy_desc_.ArraySize = 1;
+    copy_desc_.Format = srcDesc.Format;
+    copy_desc_.SampleDesc.Count = 1;
+    copy_desc_.SampleDesc.Quality = 0;
+    copy_desc_.Usage = D3D11_USAGE_DEFAULT;
+    copy_desc_.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    copy_desc_.CPUAccessFlags = 0;
+    copy_desc_.MiscFlags = 0;
+    HRESULT crt = device_->CreateTexture2D(&copy_desc_, nullptr, last_source_tex_.GetAddressOf());
+    if (FAILED(crt))
     {
-      copy_tex_.Reset();
-      copy_srv_.Reset();
-      ZeroMemory(&copy_desc_, sizeof(copy_desc_));
-      copy_desc_.Width = srcDesc.Width;
-      copy_desc_.Height = srcDesc.Height;
-      copy_desc_.MipLevels = 1;
-      copy_desc_.ArraySize = 1;
-      copy_desc_.Format = srcDesc.Format;
-      copy_desc_.SampleDesc.Count = 1;
-      copy_desc_.SampleDesc.Quality = 0;
-      copy_desc_.Usage = D3D11_USAGE_DEFAULT;
-      copy_desc_.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-      copy_desc_.CPUAccessFlags = 0;
-      copy_desc_.MiscFlags = 0;
-      HRESULT crt = device_->CreateTexture2D(&copy_desc_, nullptr, copy_tex_.GetAddressOf());
-      if (FAILED(crt))
-      {
-        std::cerr << "[OpenVR] ERROR: Failed to (re)create copy texture, hr=0x" << std::hex << crt << std::dec << "\n";
-        // Fall back to submitting the shared texture directly
-        submitTex = sharedTex;
-      }
-      else
-      {
-        HRESULT srvHr = device_->CreateShaderResourceView(copy_tex_.Get(), nullptr, copy_srv_.GetAddressOf());
-        if (FAILED(srvHr))
-        {
-          std::cerr << "[OpenVR] ERROR: Failed to create SRV for copy texture, hr=0x" << std::hex << srvHr << std::dec << "\n";
-          copy_srv_.Reset();
-        }
-      }
-    }
-    if (copy_tex_)
-    {
-      if (srcDesc.SampleDesc.Count > 1)
-      {
-        // Resolve MSAA into single-sample
-        context_->ResolveSubresource(copy_tex_.Get(), 0, sharedTex.Get(), 0, srcDesc.Format);
-        context_->Flush();
-        if (present_count <= 3)
-          std::cout << "[OpenVR] Resolved MSAA texture for overlay submit\n";
-      }
-      else
-      {
-        context_->CopyResource(copy_tex_.Get(), sharedTex.Get());
-        context_->Flush();
-        if (present_count <= 3)
-          std::cout << "[OpenVR] Copied texture into SRV-capable texture for overlay submit\n";
-      }
-      submitTex = copy_tex_;
-    }
-  }
-
-  // Create or reuse the shared texture target. Ensure RTV target exists for shader rendering.
-  D3D11_TEXTURE2D_DESC submitDesc = {};
-  submitTex->GetDesc(&submitDesc);
-
-  // Ensure output surface matches overlay/presenter target size (width_, height_)
-  if (!EnsureShaderPipeline(static_cast<UINT>(width_), static_cast<UINT>(height_)))
-  {
-    std::cerr << "[OpenVR] ERROR: Failed to ensure shader pipeline\n";
-    return;
-  }
-
-  // Shader path: render SBS -> stereo panorama into shared_legacy_tex_
-  // Create or reuse SRV for submitTex
-  ComPtr<ID3D11ShaderResourceView> transientSrv;
-  ID3D11ShaderResourceView *srvRaw = nullptr;
-  if (submitTex.Get() == copy_tex_.Get() && copy_srv_)
-  {
-    srvRaw = copy_srv_.Get();
-  }
-  else
-  {
-    HRESULT hrs = device_->CreateShaderResourceView(submitTex.Get(), nullptr, transientSrv.GetAddressOf());
-    if (SUCCEEDED(hrs))
-    {
-      srvRaw = transientSrv.Get();
+      std::cerr << "[OpenVR] ERROR: Failed to (re)create stage texture, hr=0x" << std::hex << crt << std::dec << "\n";
     }
     else
     {
-      std::cerr << "[OpenVR] ERROR: Create SRV failed, hr=0x" << std::hex << hrs << std::dec << "\n";
+      HRESULT srvHr = device_->CreateShaderResourceView(last_source_tex_.Get(), nullptr, last_source_srv_.GetAddressOf());
+      if (FAILED(srvHr))
+      {
+        std::cerr << "[OpenVR] ERROR: Failed to create SRV for stage texture, hr=0x" << std::hex << srvHr << std::dec << "\n";
+        last_source_srv_.Reset();
+      }
     }
   }
 
-  if (srvRaw)
+  if (last_source_tex_)
   {
-    context_->OMSetRenderTargets(1, shared_rtv_.GetAddressOf(), nullptr);
-    context_->RSSetViewports(1, &viewport_);
-    context_->IASetInputLayout(nullptr);
-    context_->RSSetState(rs_state_.Get());
-    const float blendFactor[4] = {0, 0, 0, 0};
-    context_->OMSetBlendState(blend_state_.Get(), blendFactor, 0xffffffff);
-    context_->OMSetDepthStencilState(ds_state_.Get(), 0);
-    context_->VSSetShader(vs_.Get(), nullptr, 0);
-    context_->PSSetShader(ps_.Get(), nullptr, 0);
-    context_->PSSetSamplers(0, 1, sampler_.GetAddressOf());
-    context_->PSSetShaderResources(0, 1, &srvRaw);
-
-    // Update constants (supply a yaw-only look rotation from HMD if available)
-    D3D11_MAPPED_SUBRESOURCE map = {};
-    if (SUCCEEDED(context_->Map(cb_params_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map)))
+    if (srcDesc.SampleDesc.Count > 1)
     {
-      // Identity lookRotation, then parameters
-      float *dst = reinterpret_cast<float *>(map.pData);
-      // Default to identity
-      for (int r = 0; r < 4; ++r)
-        for (int c = 0; c < 4; ++c)
-          dst[r * 4 + c] = (r == c) ? 1.0f : 0.0f;
-      // Query HMD pose and generate full inverse rotation with Z-flip if enabled
-      // This matches the old TypeScript version:
-      // 1. Take 3x3 rotation (transpose to get inverse for rotation matrix)
-      // 2. Scale by [1, 1, -1] to flip Z axis
-      bool appliedRotation = false;
-      if (warp_follow_head_ && vr::VRSystem())
-      {
-        vr::TrackedDevicePose_t poses[vr::k_unMaxTrackedDeviceCount] = {};
-        vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, 0, poses, vr::k_unMaxTrackedDeviceCount);
-        const vr::TrackedDevicePose_t &hmdPose = poses[vr::k_unTrackedDeviceIndex_Hmd];
-        if (hmdPose.bPoseIsValid)
-        {
-          const vr::HmdMatrix34_t &m = hmdPose.mDeviceToAbsoluteTracking;
-          // OpenVR matrix is row-major: m[row][col]
-          // To invert a rotation matrix, we transpose it
-          // Then apply scale [1, 1, -1] to flip Z
-
-          // Transpose (inverse) of rotation matrix, column-major layout for HLSL
-          // Column 0 (X axis)
-          dst[0] = m.m[0][0]; // transposed [0][0]
-          dst[1] = m.m[0][1]; // transposed [1][0]
-          dst[2] = m.m[0][2]; // transposed [2][0]
-          dst[3] = 0.0f;
-          // Column 1 (Y axis)
-          dst[4] = m.m[1][0]; // transposed [0][1]
-          dst[5] = m.m[1][1]; // transposed [1][1]
-          dst[6] = m.m[1][2]; // transposed [2][1]
-          dst[7] = 0.0f;
-          // Column 2 (Z axis) - flip sign for [1, 1, -1] scale
-          dst[8] = -m.m[2][0];  // transposed [0][2], negated
-          dst[9] = -m.m[2][1];  // transposed [1][2], negated
-          dst[10] = -m.m[2][2]; // transposed [2][2], negated
-          dst[11] = 0.0f;
-          // Column 3 (W/translation)
-          dst[12] = 0.0f;
-          dst[13] = 0.0f;
-          dst[14] = 0.0f;
-          dst[15] = 1.0f;
-          appliedRotation = true;
-        }
-      }
-      dst[16] = fov_half_radians_;
-      dst[17] = appliedRotation ? 1.0f : 0.0f; // applyRotation flag
-      dst[18] = 0.0f;
-      dst[19] = 0.0f;
-      context_->Unmap(cb_params_.Get(), 0);
+      context_->ResolveSubresource(last_source_tex_.Get(), 0, sharedTex.Get(), 0, srcDesc.Format);
+      context_->Flush();
     }
-    context_->VSSetConstantBuffers(0, 1, cb_params_.GetAddressOf());
-    context_->PSSetConstantBuffers(0, 1, cb_params_.GetAddressOf());
-
-    // Draw full-screen quad (no VB/IB via SV_VertexID)
-    context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-    context_->Draw(4, 0);
-    context_->Flush();
-
-    if (present_count <= 3)
+    else
     {
-      std::cout << "[OpenVR] Shader panorama path drew fullscreen quad\n";
-    }
-
-    last_submitted_texture_ = shared_legacy_tex_;
-
-    if (shared_legacy_handle_)
-    {
-      vr::Texture_t eyeTexture = {(void *)shared_legacy_handle_, vr::TextureType_DXGISharedHandle, vr::ColorSpace_Auto};
-      vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
-      if (overlayError != vr::VROverlayError_None)
-      {
-        std::cerr << "[OpenVR] ERROR: SetOverlayTexture (DXGISharedHandle) failed: "
-                  << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
-      }
-      else if (present_count <= 5)
-      {
-        std::cout << "[OpenVR] Texture submitted to overlay successfully (DXGI shared handle)\n";
-      }
-    }
-
-    // Unbind resources to avoid accumulating references on the device context
-    ID3D11ShaderResourceView *nullSrv[1] = {nullptr};
-    context_->PSSetShaderResources(0, 1, nullSrv);
-    ID3D11SamplerState *nullSampler[1] = {nullptr};
-    context_->PSSetSamplers(0, 1, nullSampler);
-    ID3D11RenderTargetView *nullRtv[1] = {nullptr};
-    context_->OMSetRenderTargets(1, nullRtv, nullptr);
-    context_->VSSetShader(nullptr, nullptr, 0);
-    context_->PSSetShader(nullptr, nullptr, 0);
-    context_->ClearState();
-  }
-
-  // Visibility check
-  if (present_count <= 3)
-  {
-    bool visible = vr::VROverlay()->IsOverlayVisible(overlay_handle_);
-    std::cout << "[OpenVR] Overlay visible: " << (visible ? "true" : "false") << "\n";
-    if (!visible)
-    {
-      vr::VROverlay()->ShowOverlay(overlay_handle_);
-      std::cout << "[OpenVR] Overlay was hidden; ShowOverlay called\n";
+      context_->CopyResource(last_source_tex_.Get(), sharedTex.Get());
+      context_->Flush();
     }
   }
 
@@ -818,17 +614,12 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     UINT64 releaseKey = (acquiredKey == 0) ? 1 : 0;
     keyedMutex->ReleaseSync(releaseKey);
   }
-
   // Drain overlay events to keep the queue from growing
   vr::VREvent_t evt;
   while (vr::VROverlay()->PollNextOverlayEvent(overlay_handle_, &evt, sizeof(evt)))
   {
-    // No-op: could add minimal logging for unusual events
+    // No-op
   }
-
-  // Optionally pace submissions with the runtime's update rate to avoid spamming.
-  // This blocks until the top of frame (or timeout). Keep timeout conservative to avoid long UI stalls.
-  vr::VROverlay()->WaitFrameSync(0.1);
 }
 
 void OpenVRPresenter::Resize(int width, int height, float scale)
@@ -846,6 +637,7 @@ void OpenVRPresenter::Resize(int width, int height, float scale)
 
 void OpenVRPresenter::Cleanup()
 {
+  StopRenderLoop();
   std::lock_guard<std::mutex> lock(mtx_);
 
   if (overlay_created_ && overlay_handle_ != vr::k_ulOverlayHandleInvalid)
@@ -878,4 +670,186 @@ void OpenVRPresenter::Cleanup()
 
   context_.Reset();
   device_.Reset();
+}
+
+void OpenVRPresenter::StartRenderLoop()
+{
+  if (render_running_.load()) return;
+  render_running_.store(true);
+  render_thread_ = std::thread(&OpenVRPresenter::RenderLoop, this);
+}
+
+void OpenVRPresenter::StopRenderLoop()
+{
+  if (!render_running_.load()) return;
+  render_running_.store(false);
+  if (render_thread_.joinable())
+  {
+    render_thread_.join();
+  }
+}
+
+void OpenVRPresenter::RenderLoop()
+{
+  using clock = std::chrono::steady_clock;
+  auto first_ts = clock::now();
+  auto last_ts = first_ts;
+  auto last_report_ts = first_ts;
+  int frame_count = 0;
+  double worst_frame_ms = 0.0;
+  uint64_t last_frame_counter = 0;
+  bool have_frame_counter = false;
+  while (render_running_.load())
+  {
+    // Wait for compositor frame start
+    if (vr::VROverlay())
+    {
+      vr::VROverlay()->WaitFrameSync(0.02f);
+    }
+
+    // Gate rendering to a new HMD vsync frame
+    bool shouldRender = true;
+    if (vr::VRSystem())
+    {
+      float sinceVsync = 0.0f;
+      uint64_t frameCounter = 0;
+      if (vr::VRSystem()->GetTimeSinceLastVsync(&sinceVsync, &frameCounter))
+      {
+        if (have_frame_counter && frameCounter == last_frame_counter)
+        {
+          shouldRender = false;
+        }
+        else
+        {
+          last_frame_counter = frameCounter;
+          have_frame_counter = true;
+        }
+      }
+    }
+    if (!shouldRender)
+    {
+      continue;
+    }
+
+    bool rendered = false;
+    {
+      std::lock_guard<std::mutex> lock(mtx_);
+      bool canRender = device_ && context_ && openvr_initialized_ && overlay_created_ && last_source_srv_;
+      if (canRender)
+      {
+        if (EnsureShaderPipeline(static_cast<UINT>(width_), static_cast<UINT>(height_)))
+        {
+          ID3D11ShaderResourceView *srvRaw = last_source_srv_.Get();
+          context_->OMSetRenderTargets(1, shared_rtv_.GetAddressOf(), nullptr);
+          context_->RSSetViewports(1, &viewport_);
+          context_->IASetInputLayout(nullptr);
+          context_->RSSetState(rs_state_.Get());
+          const float blendFactor[4] = {0, 0, 0, 0};
+          context_->OMSetBlendState(blend_state_.Get(), blendFactor, 0xffffffff);
+          context_->OMSetDepthStencilState(ds_state_.Get(), 0);
+          context_->VSSetShader(vs_.Get(), nullptr, 0);
+          context_->PSSetShader(ps_.Get(), nullptr, 0);
+          context_->PSSetSamplers(0, 1, sampler_.GetAddressOf());
+          context_->PSSetShaderResources(0, 1, &srvRaw);
+
+          D3D11_MAPPED_SUBRESOURCE map = {};
+          if (SUCCEEDED(context_->Map(cb_params_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map)))
+          {
+            float *dst = reinterpret_cast<float *>(map.pData);
+            for (int r = 0; r < 4; ++r)
+              for (int c = 0; c < 4; ++c)
+                dst[r * 4 + c] = (r == c) ? 1.0f : 0.0f;
+            bool appliedRotation = false;
+            if (warp_follow_head_ && vr::VRSystem())
+            {
+              vr::TrackedDevicePose_t poses[vr::k_unMaxTrackedDeviceCount] = {};
+              vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, 0, poses, vr::k_unMaxTrackedDeviceCount);
+              const vr::TrackedDevicePose_t &hmdPose = poses[vr::k_unTrackedDeviceIndex_Hmd];
+              if (hmdPose.bPoseIsValid)
+              {
+                const vr::HmdMatrix34_t &m = hmdPose.mDeviceToAbsoluteTracking;
+                dst[0] = m.m[0][0]; dst[1] = m.m[0][1]; dst[2] = m.m[0][2]; dst[3] = 0.0f;
+                dst[4] = m.m[1][0]; dst[5] = m.m[1][1]; dst[6] = m.m[1][2]; dst[7] = 0.0f;
+                dst[8] = -m.m[2][0]; dst[9] = -m.m[2][1]; dst[10] = -m.m[2][2]; dst[11] = 0.0f;
+                dst[12] = 0.0f; dst[13] = 0.0f; dst[14] = 0.0f; dst[15] = 1.0f;
+                appliedRotation = true;
+              }
+            }
+            dst[16] = fov_half_radians_;
+            dst[17] = appliedRotation ? 1.0f : 0.0f;
+            dst[18] = 0.0f;
+            dst[19] = 0.0f;
+            context_->Unmap(cb_params_.Get(), 0);
+          }
+          context_->VSSetConstantBuffers(0, 1, cb_params_.GetAddressOf());
+          context_->PSSetConstantBuffers(0, 1, cb_params_.GetAddressOf());
+
+          context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+          context_->Draw(4, 0);
+          context_->Flush();
+
+          last_submitted_texture_ = shared_legacy_tex_;
+          rendered = true;
+
+          if (shared_legacy_handle_)
+          {
+            vr::Texture_t eyeTexture = {(void *)shared_legacy_handle_, vr::TextureType_DXGISharedHandle, vr::ColorSpace_Auto};
+            vr::EVROverlayError overlayError = vr::VROverlay()->SetOverlayTexture(overlay_handle_, &eyeTexture);
+            if (overlayError != vr::VROverlayError_None)
+            {
+              std::cerr << "[OpenVR] ERROR: SetOverlayTexture failed: "
+                        << vr::VROverlay()->GetOverlayErrorNameFromEnum(overlayError) << "\n";
+            }
+          }
+
+          // Unbind to prevent leaks of references on the context
+          ID3D11ShaderResourceView *nullSrv[1] = {nullptr};
+          context_->PSSetShaderResources(0, 1, nullSrv);
+          ID3D11SamplerState *nullSampler[1] = {nullptr};
+          context_->PSSetSamplers(0, 1, nullSampler);
+          ID3D11RenderTargetView *nullRtv[1] = {nullptr};
+          context_->OMSetRenderTargets(1, nullRtv, nullptr);
+          context_->VSSetShader(nullptr, nullptr, 0);
+          context_->PSSetShader(nullptr, nullptr, 0);
+          context_->ClearState();
+
+          // Drain overlay events to keep the queue from growing
+          vr::VREvent_t evt;
+          while (vr::VROverlay() && vr::VROverlay()->PollNextOverlayEvent(overlay_handle_, &evt, sizeof(evt)))
+          {
+            // No-op
+          }
+        }
+      }
+    }
+
+    if (rendered)
+    {
+      auto now = clock::now();
+      frame_count++;
+      double delta_s = std::chrono::duration<double>(now - last_ts).count();
+      last_ts = now;
+      if (delta_s > 0.0)
+      {
+        double delta_ms = delta_s * 1000.0;
+        if (delta_ms > worst_frame_ms) worst_frame_ms = delta_ms;
+      }
+      bool interval_report = (frame_count % 120) == 0;
+      bool time_report = (std::chrono::duration<double>(now - last_report_ts).count() >= 5.0);
+      if (frame_count == 1 || interval_report || time_report)
+      {
+        double total_s = std::chrono::duration<double>(now - first_ts).count();
+        double avg_hz = total_s > 0.0 ? static_cast<double>(frame_count) / total_s : 0.0;
+        double avg_ms = avg_hz > 0.0 ? 1000.0 / avg_hz : 0.0;
+        double last_ms = delta_s > 0.0 ? delta_s * 1000.0 : 0.0;
+        std::cout << std::fixed << std::setprecision(2)
+                  << "[OpenVR] RenderLoop stats: total=" << frame_count
+                  << " avg=" << avg_hz << "Hz (" << avg_ms << "ms)"
+                  << " last=" << last_ms << "ms"
+                  << " worst=" << worst_frame_ms << "ms"
+                  << std::defaultfloat << "\n";
+        last_report_ts = now;
+      }
+    }
+  }
 }

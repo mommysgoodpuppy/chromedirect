@@ -5,6 +5,8 @@
 #include <d3d11_1.h>
 #include <wrl/client.h>
 #include <mutex>
+#include <thread>
+#include <atomic>
 #include <openvr.h>
 #include "Presenter.h"
 
@@ -49,6 +51,9 @@ private:
   bool CreateD3DDevice();
   bool EnsureShaderPipeline(UINT outWidth, UINT outHeight);
   void Cleanup();
+  void StartRenderLoop();
+  void StopRenderLoop();
+  void RenderLoop();
 
   // D3D11 device/context used for interop and copies.
   Microsoft::WRL::ComPtr<ID3D11Device> device_;
@@ -79,6 +84,8 @@ private:
   Microsoft::WRL::ComPtr<ID3D11Texture2D> copy_tex_;
   D3D11_TEXTURE2D_DESC copy_desc_ = {};
   Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> copy_srv_;
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> last_source_tex_;
+  Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> last_source_srv_;
 
   // Shader pipeline for rendering into shared_legacy_tex_
   // Default to ~56 degrees half-FOV (matches prior pipeline: 112° vertical FOV total)
@@ -94,5 +101,7 @@ private:
   Microsoft::WRL::ComPtr<ID3D11BlendState> blend_state_;
   Microsoft::WRL::ComPtr<ID3D11DepthStencilState> ds_state_;
   D3D11_VIEWPORT viewport_ = {};
+  std::thread render_thread_;
+  std::atomic<bool> render_running_{false};
   // debug fields removed
 };
