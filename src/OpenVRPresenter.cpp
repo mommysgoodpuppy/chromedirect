@@ -599,12 +599,10 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
     if (srcDesc.SampleDesc.Count > 1)
     {
       context_->ResolveSubresource(last_source_tex_.Get(), 0, sharedTex.Get(), 0, srcDesc.Format);
-      context_->Flush();
     }
     else
     {
       context_->CopyResource(last_source_tex_.Get(), sharedTex.Get());
-      context_->Flush();
     }
   }
 
@@ -699,6 +697,8 @@ void OpenVRPresenter::RenderLoop()
   double worst_frame_ms = 0.0;
   uint64_t last_frame_counter = 0;
   bool have_frame_counter = false;
+  // Raise priority to reduce scheduling jitter
+  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
   while (render_running_.load())
   {
     // Wait for compositor frame start
@@ -728,6 +728,7 @@ void OpenVRPresenter::RenderLoop()
     }
     if (!shouldRender)
     {
+      std::this_thread::yield();
       continue;
     }
 
