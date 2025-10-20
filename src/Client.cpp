@@ -141,7 +141,27 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
           return;
         }
         vr::TrackedDevicePose_t poses[vr::k_unMaxTrackedDeviceCount] = {};
-        vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, 0, poses, vr::k_unMaxTrackedDeviceCount);
+        // Sample predicted pose aligned with HMD vsync -> seconds-to-photons
+        float sinceVsync = 0.0f; uint64_t fc = 0;
+        vr::ETrackedPropertyError propErr = vr::TrackedProp_Success;
+        float secondsFromVsyncToPhotons = vr::VRSystem()->GetFloatTrackedDeviceProperty(
+            vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_SecondsFromVsyncToPhotons_Float, &propErr);
+        if (propErr != vr::TrackedProp_Success)
+          secondsFromVsyncToPhotons = 0.0f;
+        float displayHz = vr::VRSystem()->GetFloatTrackedDeviceProperty(
+            vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_DisplayFrequency_Float, &propErr);
+        if (propErr != vr::TrackedProp_Success || displayHz <= 0.0f)
+          displayHz = 90.0f;
+        const double frameDur = 1.0 / static_cast<double>(displayHz);
+        double predictedSeconds = 0.0;
+        if (vr::VRSystem()->GetTimeSinceLastVsync(&sinceVsync, &fc))
+        {
+          double untilNextVsync = frameDur - static_cast<double>(sinceVsync);
+          if (untilNextVsync < 0.0) untilNextVsync = 0.0;
+          predictedSeconds = untilNextVsync + static_cast<double>(secondsFromVsyncToPhotons);
+        }
+        vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(
+            vr::TrackingUniverseStanding, static_cast<float>(predictedSeconds), poses, vr::k_unMaxTrackedDeviceCount);
         float hPos[3] = {0}, hQuat[4] = {0, 0, 0, 1};
         float lPos[3] = {0}, lQuat[4] = {0, 0, 0, 1};
         float rPos[3] = {0}, rQuat[4] = {0, 0, 0, 1};
@@ -168,7 +188,30 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
           }
         }
         client_->SendPoseToRenderer(frame, hPos, hQuat, lPos, lQuat, rPos, rQuat);
-        CefPostDelayedTask(TID_UI, this, ms_);
+        // Nudge a paint to ensure the page renders with the freshest pose data
+        br->GetHost()->Invalidate(PET_VIEW);
+        // Dynamically align next tick near the next HMD vsync, but do not exceed configured pose_ms
+        int nextDelayMs = ms_;
+        if (vr::VRSystem())
+        {
+          vr::ETrackedPropertyError err = vr::TrackedProp_Success;
+          float displayHz2 = vr::VRSystem()->GetFloatTrackedDeviceProperty(
+              vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_DisplayFrequency_Float, &err);
+          if (err != vr::TrackedProp_Success || displayHz2 <= 0.0f)
+            displayHz2 = 90.0f;
+          const double frameDurMs = 1000.0 / static_cast<double>(displayHz2);
+          float sinceVsync2 = 0.0f; uint64_t fc2 = 0;
+          if (vr::VRSystem()->GetTimeSinceLastVsync(&sinceVsync2, &fc2))
+          {
+            double untilNextVsyncMs = frameDurMs - static_cast<double>(sinceVsync2) * 1000.0;
+            while (untilNextVsyncMs < 0.0) untilNextVsyncMs += frameDurMs;
+            const double biasMs = 0.5; // submit shortly before vsync
+            double ideal = (untilNextVsyncMs > biasMs) ? (untilNextVsyncMs - biasMs) : (frameDurMs - biasMs);
+            ideal = std::max(1.0, ideal);
+            nextDelayMs = static_cast<int>(std::min(ideal, static_cast<double>(ms_)));
+          }
+        }
+        CefPostDelayedTask(TID_UI, this, nextDelayMs);
       }
 
     private:

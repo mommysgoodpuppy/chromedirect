@@ -175,7 +175,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   float scale_m = 1.0f;
   std::string overlay_key = "cef.web.overlay";
   std::string start_url = "https://www.google.com";
-  int target_fps = 60;   // HARDCODED: 60 FPS cap to mitigate AMD VRAM leak (CEF #3968)
+  int target_fps = 90;   // HARDCODED: 60 FPS cap to mitigate AMD VRAM leak (CEF #3968)
   float fov_deg = 90.0f; // total FOV; half used in shader
   bool warp_follow_head = false;
 
@@ -199,7 +199,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   {
     width = 4000;
     height = 2000;
-    // target_fps = 120;  // DISABLED: capped to 60 for AMD VRAM leak mitigation
     scale_m = 3.0f;
     std::cout << "[CEF Demo] VR mode enabled (OpenVR presenter)" << std::endl;
   }
@@ -249,7 +248,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     std::cout << "[CEF Demo] WARNING: --fps flag ignored, capped at 60 for AMD workaround\n";
   }
   // Force 60 FPS regardless of VR mode
-  target_fps = 60;
+  target_fps = 120;
 
   if (!scale_explicit && g_enable_vr_mode)
   {

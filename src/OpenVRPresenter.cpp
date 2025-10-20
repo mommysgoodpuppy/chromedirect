@@ -764,6 +764,7 @@ void OpenVRPresenter::RenderLoop()
             if (warp_follow_head_ && vr::VRSystem())
             {
               vr::TrackedDevicePose_t poses[vr::k_unMaxTrackedDeviceCount] = {};
+              // shader view rotation
               vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, 0, poses, vr::k_unMaxTrackedDeviceCount);
               const vr::TrackedDevicePose_t &hmdPose = poses[vr::k_unTrackedDeviceIndex_Hmd];
               if (hmdPose.bPoseIsValid)
