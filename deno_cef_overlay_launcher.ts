@@ -79,8 +79,8 @@ function parseArgs(): Args {
     }
   }
   if (out.vrMode) {
-    if (!widthExplicit) out.width = 4000;
-    if (!heightExplicit) out.height = 2000;
+    if (!widthExplicit) out.width = 8000;
+    if (!heightExplicit) out.height = 8000;
     if (!fpsExplicit) out.fps = 120;
     if (!scaleExplicit) out.scale = 3.0;
   } else {
