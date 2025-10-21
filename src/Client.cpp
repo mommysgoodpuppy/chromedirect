@@ -216,7 +216,7 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
           }
         }
         // Apply blending to reduce jumps
-        const float alpha = 0.5f; // Blend factor: higher = more smoothing
+        const float alpha = 0.9f; // Blend factor
         if (!initialized_)
         {
           memcpy(prev_hPos, hPos, sizeof(hPos));

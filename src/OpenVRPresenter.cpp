@@ -763,9 +763,27 @@ void OpenVRPresenter::RenderLoop()
             bool appliedRotation = false;
             if (warp_follow_head_ && vr::VRSystem())
             {
+              // Calculate predicted pose time for shader rotation
+              vr::ETrackedPropertyError propErr = vr::TrackedProp_Success;
+              float displayHz = vr::VRSystem()->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_DisplayFrequency_Float, &propErr);
+              if (propErr != vr::TrackedProp_Success || displayHz <= 0.0f)
+                displayHz = 90.0f;
+              float secondsFromVsyncToPhotons = vr::VRSystem()->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_SecondsFromVsyncToPhotons_Float, &propErr);
+              if (propErr != vr::TrackedProp_Success)
+                secondsFromVsyncToPhotons = 0.0f;
+              const double frameDur = 1.0 / static_cast<double>(displayHz);
+              double predictedSeconds = 0.0;
+              float sinceVsync = 0.0f;
+              uint64_t fc = 0;
+              if (vr::VRSystem()->GetTimeSinceLastVsync(&sinceVsync, &fc))
+              {
+                double untilNextVsync = frameDur - static_cast<double>(sinceVsync);
+                if (untilNextVsync < 0.0) untilNextVsync = 0.0;
+                predictedSeconds = untilNextVsync + static_cast<double>(secondsFromVsyncToPhotons);
+              }
               vr::TrackedDevicePose_t poses[vr::k_unMaxTrackedDeviceCount] = {};
               // shader view rotation
-              vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, 0, poses, vr::k_unMaxTrackedDeviceCount);
+              vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, static_cast<float>(predictedSeconds), poses, vr::k_unMaxTrackedDeviceCount);
               const vr::TrackedDevicePose_t &hmdPose = poses[vr::k_unTrackedDeviceIndex_Hmd];
               if (hmdPose.bPoseIsValid)
               {
