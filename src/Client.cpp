@@ -160,6 +160,7 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
           if (untilNextVsync < 0.0) untilNextVsync = 0.0;
           predictedSeconds = untilNextVsync + static_cast<double>(secondsFromVsyncToPhotons);
         }
+        // webxr pose
         vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(
             vr::TrackingUniverseStanding, static_cast<float>(predictedSeconds), poses, vr::k_unMaxTrackedDeviceCount);
         float hPos[3] = {0}, hQuat[4] = {0, 0, 0, 1};

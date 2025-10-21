@@ -245,10 +245,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   // FPS override disabled - hardcoded to 60 for AMD VRAM leak mitigation
   if (fps_explicit)
   {
-    std::cout << "[CEF Demo] WARNING: --fps flag ignored, capped at 60 for AMD workaround\n";
+    target_fps = std::max(1, atoi(app_cmd->GetSwitchValue("fps").ToString().c_str()));
   }
-  // Force 60 FPS regardless of VR mode
-  target_fps = 120;
 
   if (!scale_explicit && g_enable_vr_mode)
   {
