@@ -124,6 +124,33 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
           quat[2] = 0.25f * S;
         }
       }
+      static void Slerp(const float q1[4], const float q2[4], float t, float result[4])
+      {
+        float q2_copy[4] = {q2[0], q2[1], q2[2], q2[3]};
+        float dot = q1[0] * q2_copy[0] + q1[1] * q2_copy[1] + q1[2] * q2_copy[2] + q1[3] * q2_copy[3];
+        if (dot < 0.0f)
+        {
+          dot = -dot;
+          q2_copy[0] = -q2_copy[0];
+          q2_copy[1] = -q2_copy[1];
+          q2_copy[2] = -q2_copy[2];
+          q2_copy[3] = -q2_copy[3];
+        }
+        const float epsilon = 1e-6f;
+        if (dot > 1.0f - epsilon)
+        {
+          // Nearly the same, linear interpolation
+          for (int i = 0; i < 4; ++i)
+            result[i] = (1.0f - t) * q1[i] + t * q2_copy[i];
+          return;
+        }
+        float theta = acosf(dot);
+        float sin_theta = sinf(theta);
+        float a = sinf((1.0f - t) * theta) / sin_theta;
+        float b = sinf(t * theta) / sin_theta;
+        for (int i = 0; i < 4; ++i)
+          result[i] = a * q1[i] + b * q2_copy[i];
+      }
       void Execute() override
       {
         CEF_REQUIRE_UI_THREAD();
@@ -188,6 +215,45 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
             ToPosQuat(poses[i].mDeviceToAbsoluteTracking, rPos, rQuat);
           }
         }
+        // Apply blending to reduce jumps
+        const float alpha = 0.5f; // Blend factor: higher = more smoothing
+        if (!initialized_)
+        {
+          memcpy(prev_hPos, hPos, sizeof(hPos));
+          memcpy(prev_hQuat, hQuat, sizeof(hQuat));
+          memcpy(prev_lPos, lPos, sizeof(lPos));
+          memcpy(prev_lQuat, lQuat, sizeof(lQuat));
+          memcpy(prev_rPos, rPos, sizeof(rPos));
+          memcpy(prev_rQuat, rQuat, sizeof(rQuat));
+          initialized_ = true;
+        }
+        else
+        {
+          // Linear interpolation for positions
+          for (int i = 0; i < 3; ++i)
+          {
+            hPos[i] = alpha * hPos[i] + (1.0f - alpha) * prev_hPos[i];
+            lPos[i] = alpha * lPos[i] + (1.0f - alpha) * prev_lPos[i];
+            rPos[i] = alpha * rPos[i] + (1.0f - alpha) * prev_rPos[i];
+          }
+          // Spherical linear interpolation for quaternions
+          float blended_hQuat[4];
+          Slerp(prev_hQuat, hQuat, alpha, blended_hQuat);
+          memcpy(hQuat, blended_hQuat, sizeof(blended_hQuat));
+          float blended_lQuat[4];
+          Slerp(prev_lQuat, lQuat, alpha, blended_lQuat);
+          memcpy(lQuat, blended_lQuat, sizeof(blended_lQuat));
+          float blended_rQuat[4];
+          Slerp(prev_rQuat, rQuat, alpha, blended_rQuat);
+          memcpy(rQuat, blended_rQuat, sizeof(blended_rQuat));
+        }
+        // Update previous poses
+        memcpy(prev_hPos, hPos, sizeof(hPos));
+        memcpy(prev_hQuat, hQuat, sizeof(hQuat));
+        memcpy(prev_lPos, lPos, sizeof(lPos));
+        memcpy(prev_lQuat, lQuat, sizeof(lQuat));
+        memcpy(prev_rPos, rPos, sizeof(rPos));
+        memcpy(prev_rQuat, rQuat, sizeof(rQuat));
         client_->SendPoseToRenderer(frame, hPos, hQuat, lPos, lQuat, rPos, rQuat);
         // Nudge a paint to ensure the page renders with the freshest pose data
         br->GetHost()->Invalidate(PET_VIEW);
@@ -218,6 +284,13 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
     private:
       CefRefPtr<OffscreenClient> client_;
       int ms_;
+      float prev_hPos[3] = {0.0f};
+      float prev_hQuat[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+      float prev_lPos[3] = {0.0f};
+      float prev_lQuat[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+      float prev_rPos[3] = {0.0f};
+      float prev_rQuat[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+      bool initialized_ = false;
       IMPLEMENT_REFCOUNTING(VrPoseTask);
     };
     CefPostDelayedTask(TID_UI, new VrPoseTask(this, pose_ms), pose_ms);
