@@ -247,82 +247,60 @@ bool OpenVRPresenter::InitializeOpenVR()
   vr::VROverlay()->ShowOverlay(overlay_handle_);
   overlay_created_ = true;
 
-  UpdateHMDTimingProperties();
-
   return true;
 }
 
-void OpenVRPresenter::UpdateHMDTimingProperties()
-{
-  if (!vr::VRSystem())
-    return;
-  vr::ETrackedPropertyError propErr = vr::TrackedProp_Success;
-  float displayHz = vr::VRSystem()->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_DisplayFrequency_Float, &propErr);
-  if (propErr == vr::TrackedProp_Success && displayHz > 0.0f)
-  {
-    display_frequency_hz_ = displayHz;
-  }
-  propErr = vr::TrackedProp_Success;
-  float secondsToPhotons = vr::VRSystem()->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_SecondsFromVsyncToPhotons_Float, &propErr);
-  if (propErr == vr::TrackedProp_Success)
-  {
-    seconds_from_vsync_to_photons_ = secondsToPhotons;
-  }
-  hmd_timing_props_cached_ = true;
-}
-
-bool OpenVRPresenter::AcquirePredictedPose(vr::HmdMatrix34_t &poseOut)
+bool OpenVRPresenter::AcquireLookRotation(vr::HmdMatrix34_t &poseOut)
 {
   if (!vr::VRSystem())
     return false;
   if (vr::VRCompositor() && !vr::VRCompositor()->CanRenderScene())
     return false;
 
-  float secondsSinceLastVsync = 0.0f;
-  uint64_t frameCounter = 0;
-  const int kMaxAttempts = 500;
-  int attempts = 0;
-  bool haveNewFrame = false;
-  while (attempts++ < kMaxAttempts)
+  float lastVSync = 0.0f;
+  uint64_t newFrameIndex = last_vsync_frame_counter_;
+  while (newFrameIndex == last_vsync_frame_counter_)
   {
-    if (!vr::VRSystem()->GetTimeSinceLastVsync(&secondsSinceLastVsync, &frameCounter))
+    if (!vr::VRSystem()->GetTimeSinceLastVsync(&lastVSync, &newFrameIndex))
       return false;
-    if (!have_last_vsync_frame_counter_ || frameCounter != last_vsync_frame_counter_)
-    {
-      haveNewFrame = true;
-      break;
-    }
-    std::this_thread::yield();
+    if (newFrameIndex == last_vsync_frame_counter_)
+      std::this_thread::yield();
   }
-  if (!haveNewFrame)
-    return false;
 
-  if (have_last_vsync_frame_counter_ && frameCounter > last_vsync_frame_counter_ + 1)
+  if (have_last_vsync_frame_counter_ && last_vsync_frame_counter_ + 1 < newFrameIndex)
   {
     frames_skipped_debug_++;
   }
-
-  last_vsync_frame_counter_ = frameCounter;
+  last_vsync_frame_counter_ = newFrameIndex;
   have_last_vsync_frame_counter_ = true;
 
-  float secondsSinceLastVsyncNow = 0.0f;
-  uint64_t dummyCounter = 0;
-  if (!vr::VRSystem()->GetTimeSinceLastVsync(&secondsSinceLastVsyncNow, &dummyCounter))
+  float secondsSinceLastVsync = 0.0f;
+  uint64_t newLastFrame = 0;
+  if (!vr::VRSystem()->GetTimeSinceLastVsync(&secondsSinceLastVsync, &newLastFrame))
     return false;
 
-  if (!hmd_timing_props_cached_)
+  vr::ETrackedPropertyError error = vr::TrackedProp_Success;
+  float displayFrequency = vr::VRSystem()->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_DisplayFrequency_Float, &error);
+  if (error != vr::TrackedProp_Success || displayFrequency <= 0.0f)
   {
-    UpdateHMDTimingProperties();
+    displayFrequency = 90.0f;
   }
-  const float displayHz = (display_frequency_hz_ > 0.0f) ? display_frequency_hz_ : 90.0f;
-  const double frameDur = 1.0 / static_cast<double>(displayHz);
-  double predictedSeconds = frameDur - static_cast<double>(secondsSinceLastVsyncNow);
-  predictedSeconds += static_cast<double>(seconds_from_vsync_to_photons_);
-  if (predictedSeconds < 0.0)
-    predictedSeconds = 0.0;
+  float frameDuration = 1.0f / displayFrequency;
+  error = vr::TrackedProp_Success;
+  float vsyncToPhotons = vr::VRSystem()->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_SecondsFromVsyncToPhotons_Float, &error);
+  if (error != vr::TrackedProp_Success)
+  {
+    vsyncToPhotons = 0.0f;
+  }
+
+  float predictedSecondsFromNow = frameDuration - secondsSinceLastVsync + vsyncToPhotons;
+  if (predictedSecondsFromNow < 0.0f)
+  {
+    predictedSecondsFromNow = 0.0f;
+  }
 
   vr::TrackedDevicePose_t poses[vr::k_unMaxTrackedDeviceCount] = {};
-  vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, static_cast<float>(predictedSeconds), poses, vr::k_unMaxTrackedDeviceCount);
+  vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, predictedSecondsFromNow, poses, vr::k_unMaxTrackedDeviceCount);
   const vr::TrackedDevicePose_t &hmdPose = poses[vr::k_unTrackedDeviceIndex_Hmd];
   if (!hmdPose.bPoseIsValid)
     return false;
@@ -805,8 +783,7 @@ void OpenVRPresenter::RenderLoop()
   while (render_running_.load())
   {
     vr::HmdMatrix34_t predictedPose = {};
-    bool havePredictedPose = AcquirePredictedPose(predictedPose);
-    if (!havePredictedPose)
+    if (!AcquireLookRotation(predictedPose))
     {
       std::this_thread::yield();
       continue;
@@ -841,7 +818,7 @@ void OpenVRPresenter::RenderLoop()
               for (int c = 0; c < 4; ++c)
                 dst[r * 4 + c] = (r == c) ? 1.0f : 0.0f;
             bool appliedRotation = false;
-            if (warp_follow_head_ && havePredictedPose)
+            if (warp_follow_head_)
             {
               BuildLookRotationMatrix(predictedPose, dst);
               appliedRotation = true;

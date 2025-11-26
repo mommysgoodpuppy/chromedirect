@@ -54,8 +54,7 @@ private:
   void StartRenderLoop();
   void StopRenderLoop();
   void RenderLoop();
-  void UpdateHMDTimingProperties();
-  bool AcquirePredictedPose(vr::HmdMatrix34_t &pose);
+  bool AcquireLookRotation(vr::HmdMatrix34_t &pose);
 
   // D3D11 device/context used for interop and copies.
   Microsoft::WRL::ComPtr<ID3D11Device> device_;
@@ -105,9 +104,6 @@ private:
   D3D11_VIEWPORT viewport_ = {};
   std::thread render_thread_;
   std::atomic<bool> render_running_{false};
-  float display_frequency_hz_ = 90.0f;
-  float seconds_from_vsync_to_photons_ = 0.0f;
-  bool hmd_timing_props_cached_ = false;
   uint64_t last_vsync_frame_counter_ = 0;
   bool have_last_vsync_frame_counter_ = false;
   uint64_t frames_skipped_debug_ = 0;
