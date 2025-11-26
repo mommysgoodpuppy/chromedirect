@@ -25,6 +25,26 @@ static void ThrowIfFailed(HRESULT hr)
   }
 }
 
+static void BuildLookRotationMatrix(const vr::HmdMatrix34_t &pose, float *dst16)
+{
+  if (!dst16)
+    return;
+  const float r00 = pose.m[0][0];
+  const float r01 = pose.m[0][1];
+  const float r02 = pose.m[0][2];
+  const float r10 = pose.m[1][0];
+  const float r11 = pose.m[1][1];
+  const float r12 = pose.m[1][2];
+  const float r20 = pose.m[2][0];
+  const float r21 = pose.m[2][1];
+  const float r22 = pose.m[2][2];
+  // lookRotation = transpose(scale(inverse(universeFromHmd), vec3(1,1,-1))) = scaleRows(R, {1,1,-1})
+  dst16[0] = r00;  dst16[1] = r01;  dst16[2] = r02;  dst16[3] = 0.0f;
+  dst16[4] = r10;  dst16[5] = r11;  dst16[6] = r12;  dst16[7] = 0.0f;
+  dst16[8] = -r20; dst16[9] = -r21; dst16[10] = -r22; dst16[11] = 0.0f;
+  dst16[12] = 0.0f; dst16[13] = 0.0f; dst16[14] = 0.0f; dst16[15] = 1.0f;
+}
+
 OpenVRPresenter::OpenVRPresenter()
     : overlay_handle_(vr::k_ulOverlayHandleInvalid), width_(0), height_(0), scale_(1.0f),
       openvr_initialized_(false), overlay_created_(false)
@@ -128,6 +148,11 @@ bool OpenVRPresenter::InitializeOpenVR()
 
   openvr_initialized_ = true;
   std::cout << "[OpenVR] OpenVR initialized successfully\n";
+
+  if (vr::VRCompositor())
+  {
+    vr::VRCompositor()->SetTrackingSpace(vr::TrackingUniverseStanding);
+  }
 
   if (!vr::VROverlay())
   {
@@ -788,10 +813,7 @@ void OpenVRPresenter::RenderLoop()
               if (hmdPose.bPoseIsValid)
               {
                 const vr::HmdMatrix34_t &m = hmdPose.mDeviceToAbsoluteTracking;
-                dst[0] = m.m[0][0]; dst[1] = m.m[0][1]; dst[2] = m.m[0][2]; dst[3] = 0.0f;
-                dst[4] = m.m[1][0]; dst[5] = m.m[1][1]; dst[6] = m.m[1][2]; dst[7] = 0.0f;
-                dst[8] = -m.m[2][0]; dst[9] = -m.m[2][1]; dst[10] = -m.m[2][2]; dst[11] = 0.0f;
-                dst[12] = 0.0f; dst[13] = 0.0f; dst[14] = 0.0f; dst[15] = 1.0f;
+                BuildLookRotationMatrix(m, dst);
                 appliedRotation = true;
               }
             }
