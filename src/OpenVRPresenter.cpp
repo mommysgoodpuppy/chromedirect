@@ -6,7 +6,6 @@
 #include <iomanip>
 #include <dxgi.h>
 #include <d3dcompiler.h>
-#include <cstdlib>
 
 /*
  Minimal OpenVR overlay presenter for CEF OSR.
@@ -129,12 +128,6 @@ bool OpenVRPresenter::InitializeOpenVR()
 
   openvr_initialized_ = true;
   std::cout << "[OpenVR] OpenVR initialized successfully\n";
-
-  if (vr::VRCompositor())
-  {
-    vr::VRCompositor()->SetTrackingSpace(vr::TrackingUniverseStanding);
-    std::cout << "[OpenVR] Tracking space set to Standing\n";
-  }
 
   if (!vr::VROverlay())
   {
@@ -288,7 +281,7 @@ Texture2D srcTex : register(t0);
 SamplerState samp0 : register(s0);
 
 cbuffer Params : register(b0) {
-  float4x4 lookRotation; // view rotation (column-major)
+  row_major float4x4 lookRotation; // view rotation
   float halfFOVInRadians;
   float applyRotation; // 0=no, 1=yes
   float2 pad;
@@ -322,7 +315,7 @@ float4 main(PSIn i) : SV_Target {
 
   // Optional look rotation
   if (applyRotation > 0.5) {
-    dir = mul(lookRotation, float4(dir,0.0)).xyz;
+    dir = mul(float4(dir,0.0), lookRotation).xyz;
   }
 
   float projX = (dir.x / abs(dir.z)) / fovScalar;
@@ -679,16 +672,14 @@ void OpenVRPresenter::Cleanup()
 
 void OpenVRPresenter::StartRenderLoop()
 {
-  if (render_running_.load())
-    return;
+  if (render_running_.load()) return;
   render_running_.store(true);
   render_thread_ = std::thread(&OpenVRPresenter::RenderLoop, this);
 }
 
 void OpenVRPresenter::StopRenderLoop()
 {
-  if (!render_running_.load())
-    return;
+  if (!render_running_.load()) return;
   render_running_.store(false);
   if (render_thread_.joinable())
   {
@@ -699,7 +690,6 @@ void OpenVRPresenter::StopRenderLoop()
 void OpenVRPresenter::RenderLoop()
 {
   using clock = std::chrono::steady_clock;
-  using namespace std::chrono_literals;
   auto first_ts = clock::now();
   auto last_ts = first_ts;
   auto last_report_ts = first_ts;
@@ -711,15 +701,14 @@ void OpenVRPresenter::RenderLoop()
   SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
   while (render_running_.load())
   {
-    // Block until the compositor advances to the next frame and give us predicted poses.
-    vr::TrackedDevicePose_t predictedPoses[vr::k_unMaxTrackedDeviceCount] = {};
-    if (vr::VRCompositor())
+    // Wait for compositor frame start
+    if (vr::VROverlay())
     {
-      vr::VRCompositor()->WaitGetPoses(predictedPoses, vr::k_unMaxTrackedDeviceCount, nullptr, 0);
+      vr::VROverlay()->WaitFrameSync(0.02f);
     }
 
-    // Gate to HMD vsync; if the frame counter hasn't advanced, sleep briefly to avoid runaway loops.
-    bool frame_advanced = false;
+    // Gate rendering to a new HMD vsync frame
+    bool shouldRender = true;
     if (vr::VRSystem())
     {
       float sinceVsync = 0.0f;
@@ -728,17 +717,18 @@ void OpenVRPresenter::RenderLoop()
       {
         if (have_frame_counter && frameCounter == last_frame_counter)
         {
-          std::this_thread::sleep_for(1ms);
-          continue;
+          shouldRender = false;
         }
-        last_frame_counter = frameCounter;
-        have_frame_counter = true;
-        frame_advanced = true;
+        else
+        {
+          last_frame_counter = frameCounter;
+          have_frame_counter = true;
+        }
       }
     }
-    if (!frame_advanced)
+    if (!shouldRender)
     {
-      std::this_thread::sleep_for(1ms);
+      std::this_thread::yield();
       continue;
     }
 
@@ -767,41 +757,42 @@ void OpenVRPresenter::RenderLoop()
           if (SUCCEEDED(context_->Map(cb_params_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map)))
           {
             float *dst = reinterpret_cast<float *>(map.pData);
-            // Column-major identity
-            for (int i = 0; i < 16; ++i)
-              dst[i] = 0.0f;
-            dst[0] = dst[5] = dst[10] = dst[15] = 1.0f;
+            for (int r = 0; r < 4; ++r)
+              for (int c = 0; c < 4; ++c)
+                dst[r * 4 + c] = (r == c) ? 1.0f : 0.0f;
             bool appliedRotation = false;
             if (warp_follow_head_ && vr::VRSystem())
             {
-              const vr::TrackedDevicePose_t &hmdPose = predictedPoses[vr::k_unTrackedDeviceIndex_Hmd];
+              // Calculate predicted pose time for shader rotation
+              vr::ETrackedPropertyError propErr = vr::TrackedProp_Success;
+              float displayHz = vr::VRSystem()->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_DisplayFrequency_Float, &propErr);
+              if (propErr != vr::TrackedProp_Success || displayHz <= 0.0f)
+                displayHz = 90.0f;
+              float secondsFromVsyncToPhotons = vr::VRSystem()->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_SecondsFromVsyncToPhotons_Float, &propErr);
+              if (propErr != vr::TrackedProp_Success)
+                secondsFromVsyncToPhotons = 0.0f;
+              const double frameDur = 1.0 / static_cast<double>(displayHz);
+              double predictedSeconds = 0.0;
+              float sinceVsync = 0.0f;
+              uint64_t fc = 0;
+              if (vr::VRSystem()->GetTimeSinceLastVsync(&sinceVsync, &fc))
+              {
+                double untilNextVsync = frameDur - static_cast<double>(sinceVsync);
+                if (untilNextVsync < 0.0) untilNextVsync = 0.0;
+                predictedSeconds = untilNextVsync + static_cast<double>(secondsFromVsyncToPhotons);
+              }
+              vr::TrackedDevicePose_t poses[vr::k_unMaxTrackedDeviceCount] = {};
+              // shader view rotation
+              vr::VRSystem()->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, static_cast<float>(predictedSeconds), poses, vr::k_unMaxTrackedDeviceCount);
+              const vr::TrackedDevicePose_t &hmdPose = poses[vr::k_unTrackedDeviceIndex_Hmd];
               if (hmdPose.bPoseIsValid)
               {
                 const vr::HmdMatrix34_t &m = hmdPose.mDeviceToAbsoluteTracking;
-                // Build head-from-world rotation: transpose of OpenVR world-from-head, then flip Z to convert to shader space.
-                // Column-major layout (matching HLSL default).
-                dst[0] = m.m[0][0];
-                dst[1] = m.m[0][1];
-                dst[2] = m.m[0][2];
-                dst[3] = 0.0f; // col 0 (head-from-world)
-                dst[4] = m.m[1][0];
-                dst[5] = m.m[1][1];
-                dst[6] = m.m[1][2];
-                dst[7] = 0.0f; // col 1
-                dst[8] = -m.m[2][0];
-                dst[9] = -m.m[2][1];
-                dst[10] = -m.m[2][2];
-                dst[11] = 0.0f; // col 2 (flipped Z)
-                dst[12] = 0.0f;
-                dst[13] = 0.0f;
-                dst[14] = 0.0f;
-                dst[15] = 1.0f; // col 3
-                appliedRotation = false;
-              }
-              else
-              {
-                std::cerr << "[OpenVR] ERROR: HMD pose invalid in render loop — aborting as requested by configuration.\n";
-                std::abort();
+                dst[0] = m.m[0][0]; dst[1] = m.m[0][1]; dst[2] = m.m[0][2]; dst[3] = 0.0f;
+                dst[4] = m.m[1][0]; dst[5] = m.m[1][1]; dst[6] = m.m[1][2]; dst[7] = 0.0f;
+                dst[8] = -m.m[2][0]; dst[9] = -m.m[2][1]; dst[10] = -m.m[2][2]; dst[11] = 0.0f;
+                dst[12] = 0.0f; dst[13] = 0.0f; dst[14] = 0.0f; dst[15] = 1.0f;
+                appliedRotation = true;
               }
             }
             dst[16] = fov_half_radians_;
@@ -861,8 +852,7 @@ void OpenVRPresenter::RenderLoop()
       if (delta_s > 0.0)
       {
         double delta_ms = delta_s * 1000.0;
-        if (delta_ms > worst_frame_ms)
-          worst_frame_ms = delta_ms;
+        if (delta_ms > worst_frame_ms) worst_frame_ms = delta_ms;
       }
       bool interval_report = (frame_count % 120) == 0;
       bool time_report = (std::chrono::duration<double>(now - last_report_ts).count() >= 5.0);

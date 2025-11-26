@@ -19,7 +19,7 @@ if(NOT DEFINED CEF_ROOT OR CEF_ROOT STREQUAL "")
     set(CEF_ROOT $ENV{CEF_ROOT})
   else()
     # Default to SDK path inside repo
-    set(CEF_ROOT "${CMAKE_SOURCE_DIR}/SDK/cef_binary_142.0.17")
+    set(CEF_ROOT "${CMAKE_SOURCE_DIR}/SDK/cef_binary_141.0.7+ga5714cc+chromium-141.0.7390.108_windows64_minimal")
   endif()
 endif()
 
