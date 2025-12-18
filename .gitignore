@@ -1,2 +1,4 @@
 build/
 SDK/
+.zig-cache/
+zig-out/

@@ -1,0 +1,17 @@
+.{
+    .name = .chromedirect,
+    .version = "0.0.1",
+    .dependencies = .{
+        .cefzig = .{
+            .url = "git+https://github.com/mommysgoodpuppy/cefzig.git#d057c84b79aa8dd4770d317671f9df73acd2c9bf",
+            .hash = "cefzig-0.0.0-cgpUY5znAADyudur5uw-wTV2mRa73RvVF0MQvrfTWCng",
+        },
+        .openvr = .{
+            .url = "https://github.com/ValveSoftware/openvr/archive/refs/tags/v2.12.14.tar.gz",
+            .hash = "N-V-__8AAIs26h6FTGgdNMBYAtuAi9dp1BjLnmcAMJOwQtT8",
+        },
+    },
+    .minimum_zig_version = "0.15.2",
+    .paths = .{""},
+    .fingerprint = 0xbcdd76fff8487c66,
+}

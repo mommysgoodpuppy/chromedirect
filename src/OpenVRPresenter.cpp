@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <dxgi.h>
 #include <d3dcompiler.h>
+#include <windows.h>
 
 /*
  Minimal OpenVR overlay presenter for CEF OSR.
@@ -346,6 +347,55 @@ void OpenVRPresenter::SetIgnoreTextureAlpha(bool enable)
   vr::VROverlay()->SetOverlayFlag(overlay_handle_, vr::VROverlayFlags_IgnoreTextureAlpha, enable);
 }
 
+using D3DCompileProc = HRESULT(WINAPI *)(
+    LPCVOID,
+    SIZE_T,
+    LPCSTR,
+    const D3D_SHADER_MACRO *,
+    ID3DInclude *,
+    LPCSTR,
+    LPCSTR,
+    UINT,
+    UINT,
+    ID3DBlob **,
+    ID3DBlob **);
+
+static D3DCompileProc ResolveD3DCompile()
+{
+  static D3DCompileProc cached = nullptr;
+  static bool attempted = false;
+  if (cached || attempted)
+    return cached;
+  attempted = true;
+
+  auto load_module = [](const wchar_t *name) -> HMODULE {
+    HMODULE mod = GetModuleHandleW(name);
+    if (mod)
+      return mod;
+    return LoadLibraryW(name);
+  };
+
+  HMODULE compiler = load_module(L"d3dcompiler_47.dll");
+  if (!compiler)
+  {
+    compiler = load_module(L"d3dcompiler.dll");
+  }
+
+  if (!compiler)
+  {
+    std::cerr << "[OpenVR] ERROR: Unable to load d3dcompiler DLL\n";
+    return nullptr;
+  }
+
+  cached = reinterpret_cast<D3DCompileProc>(GetProcAddress(compiler, "D3DCompile"));
+  if (!cached)
+  {
+    std::cerr << "[OpenVR] ERROR: D3DCompile not exported by compiler DLL\n";
+    return nullptr;
+  }
+  return cached;
+}
+
 static const char *kVS_Src = R"HLSL(
 struct VSOut { float4 pos:SV_Position; float2 uv:TEXCOORD0; };
 static const float2 kPos[4] = { float2(-1,-1), float2(1,-1), float2(-1,1), float2(1,1) };
@@ -421,14 +471,20 @@ bool OpenVRPresenter::EnsureShaderPipeline(UINT outWidth, UINT outHeight)
   HRESULT hr;
   if (!vs_ || !ps_)
   {
+    D3DCompileProc d3d_compile = ResolveD3DCompile();
+    if (!d3d_compile)
+    {
+      return false;
+    }
+
     ComPtr<ID3DBlob> vsBlob, psBlob, err;
-    hr = D3DCompile(kVS_Src, strlen(kVS_Src), nullptr, nullptr, nullptr, "main", "vs_5_0", 0, 0, vsBlob.GetAddressOf(), err.GetAddressOf());
+    hr = d3d_compile(kVS_Src, strlen(kVS_Src), nullptr, nullptr, nullptr, "main", "vs_5_0", 0, 0, vsBlob.GetAddressOf(), err.GetAddressOf());
     if (FAILED(hr))
     {
       std::cerr << "[OpenVR] ERROR: VS compile failed\n";
       return false;
     }
-    hr = D3DCompile(kPS_Src, strlen(kPS_Src), nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0, psBlob.GetAddressOf(), err.GetAddressOf());
+    hr = d3d_compile(kPS_Src, strlen(kPS_Src), nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0, psBlob.GetAddressOf(), err.GetAddressOf());
     if (FAILED(hr))
     {
       std::cerr << "[OpenVR] ERROR: PS compile failed\n";
