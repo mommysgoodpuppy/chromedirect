@@ -66,6 +66,11 @@ public:
   // This is used for v1 determinism when the browser cannot keep up (texture reuse).
   void SetFrozenWarpPose(const vr::HmdMatrix34_t &pose);
 
+  // If enabled and a frozen warp pose exists, apply a simple rotation-only timewarp based on the
+  // current predicted pose vs the frozen pose. This helps reduce head-rotation judder when the
+  // browser is a frame behind.
+  void SetTimewarpEnabled(bool enable);
+
   // Get the D3D11 device for CEF compatibility
   Microsoft::WRL::ComPtr<ID3D11Device> GetDevice() const override { return device_; }
 
@@ -83,6 +88,7 @@ private:
   PoseCallback pose_cb_;
   vr::HmdMatrix34_t frozen_warp_pose_ = {};
   bool have_frozen_warp_pose_ = false;
+  bool timewarp_enabled_ = false;
 
   // D3D11 device/context used for interop and copies.
   Microsoft::WRL::ComPtr<ID3D11Device> device_;

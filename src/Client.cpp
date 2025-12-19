@@ -25,14 +25,16 @@ OffscreenClient::OffscreenClient(HWND host_window,
                                  int height,
                                  float scale,
                                  int frame_rate,
-                                 bool vr_mode)
+                                 bool vr_mode,
+                                 bool freeze_warp_pose)
     : host_window_(host_window),
       presenter_(std::move(presenter)),
       width_(width),
       height_(height),
       scale_(scale),
       frame_rate_(frame_rate),
-      vr_mode_(vr_mode)
+      vr_mode_(vr_mode),
+      freeze_warp_pose_(freeze_warp_pose)
 {
   std::cout << "[Client] OffscreenClient created (" << width << "x" << height
             << ", scale=" << scale << ", vr_mode=" << (vr_mode_ ? "1" : "0") << ")\n";
@@ -591,34 +593,15 @@ void OffscreenClient::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
   {
     presenter_->PresentSharedHandle(info.shared_texture_handle, width_, height_);
 
-    // Freeze the presenter's warp pose to the pose used for this completed browser frame.
-    if (have_in_flight_pose_)
+    // Optional: freeze the presenter's warp pose to the pose used for this completed browser frame.
+    // This improves determinism when reusing old textures, but can introduce head-rotation judder
+    // if browser paint cadence is below HMD vsync. Pair with --timewarp to compensate.
+    if (freeze_warp_pose_ && have_in_flight_pose_)
     {
       auto vrp = std::dynamic_pointer_cast<OpenVRPresenter>(presenter_);
       if (vrp)
       {
-        vr::HmdMatrix34_t m = {};
-        m.m[0][0] = 1.0f; m.m[0][1] = 0.0f; m.m[0][2] = 0.0f; m.m[0][3] = 0.0f;
-        m.m[1][0] = 0.0f; m.m[1][1] = 1.0f; m.m[1][2] = 0.0f; m.m[1][3] = 0.0f;
-        m.m[2][0] = 0.0f; m.m[2][1] = 0.0f; m.m[2][2] = 1.0f; m.m[2][3] = 0.0f;
-
-        // Prefer exact matrix if available later; for now we only need rotation.
-        const auto &q = in_flight_pose_.hmd_quat;
-        const float x = q[0], y = q[1], z = q[2], w = q[3];
-        const float xx = x * x, yy = y * y, zz = z * z;
-        const float xy = x * y, xz = x * z, yz = y * z;
-        const float wx = w * x, wy = w * y, wz = w * z;
-        m.m[0][0] = 1.0f - 2.0f * (yy + zz);
-        m.m[0][1] = 2.0f * (xy - wz);
-        m.m[0][2] = 2.0f * (xz + wy);
-        m.m[1][0] = 2.0f * (xy + wz);
-        m.m[1][1] = 1.0f - 2.0f * (xx + zz);
-        m.m[1][2] = 2.0f * (yz - wx);
-        m.m[2][0] = 2.0f * (xz - wy);
-        m.m[2][1] = 2.0f * (yz + wx);
-        m.m[2][2] = 1.0f - 2.0f * (xx + yy);
-
-        vrp->SetFrozenWarpPose(m);
+        vrp->SetFrozenWarpPose(in_flight_pose_.hmd_matrix);
       }
       have_in_flight_pose_ = false;
     }

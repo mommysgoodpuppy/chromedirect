@@ -47,6 +47,67 @@ static void BuildLookRotationMatrix(const vr::HmdMatrix34_t &pose, float *dst16)
   dst16[12] = 0.0f; dst16[13] = 0.0f; dst16[14] = 0.0f; dst16[15] = 1.0f;
 }
 
+static void BuildTimewarpRotationMatrix(const vr::HmdMatrix34_t &predictedPose,
+                                        const vr::HmdMatrix34_t &renderPose,
+                                        float *dst16)
+{
+  if (!dst16)
+    return;
+
+  // Timewarp attempt (rotation-only):
+  // - renderPose: pose used to produce the browser texture (frozen at OnAcceleratedPaint)
+  // - predictedPose: pose for "now" (HMD vsync-predicted)
+  //
+  // The shader expects an absolute look-rotation matrix; using only a small delta rotation
+  // (inv(render)*predicted) breaks warp-follow-head because it removes the large, absolute
+  // component. To keep behavior consistent, we compose the delta with the render pose:
+  //
+  //   delta = inv(render) * predicted
+  //   combined = delta * render
+  //
+  // which reduces to render when delta≈I, but still moves toward predicted as they diverge.
+  // We intentionally ignore translation; this is rotation-only.
+  const float pr00 = predictedPose.m[0][0], pr01 = predictedPose.m[0][1], pr02 = predictedPose.m[0][2];
+  const float pr10 = predictedPose.m[1][0], pr11 = predictedPose.m[1][1], pr12 = predictedPose.m[1][2];
+  const float pr20 = predictedPose.m[2][0], pr21 = predictedPose.m[2][1], pr22 = predictedPose.m[2][2];
+
+  const float rr00 = renderPose.m[0][0], rr01 = renderPose.m[0][1], rr02 = renderPose.m[0][2];
+  const float rr10 = renderPose.m[1][0], rr11 = renderPose.m[1][1], rr12 = renderPose.m[1][2];
+  const float rr20 = renderPose.m[2][0], rr21 = renderPose.m[2][1], rr22 = renderPose.m[2][2];
+
+  // delta = transpose(render R) * predicted R
+  const float d00 = rr00 * pr00 + rr10 * pr10 + rr20 * pr20;
+  const float d01 = rr00 * pr01 + rr10 * pr11 + rr20 * pr21;
+  const float d02 = rr00 * pr02 + rr10 * pr12 + rr20 * pr22;
+
+  const float d10 = rr01 * pr00 + rr11 * pr10 + rr21 * pr20;
+  const float d11 = rr01 * pr01 + rr11 * pr11 + rr21 * pr21;
+  const float d12 = rr01 * pr02 + rr11 * pr12 + rr21 * pr22;
+
+  const float d20 = rr02 * pr00 + rr12 * pr10 + rr22 * pr20;
+  const float d21 = rr02 * pr01 + rr12 * pr11 + rr22 * pr21;
+  const float d22 = rr02 * pr02 + rr12 * pr12 + rr22 * pr22;
+
+  // combined = delta * render
+  const float c00 = d00 * rr00 + d01 * rr10 + d02 * rr20;
+  const float c01 = d00 * rr01 + d01 * rr11 + d02 * rr21;
+  const float c02 = d00 * rr02 + d01 * rr12 + d02 * rr22;
+
+  const float c10 = d10 * rr00 + d11 * rr10 + d12 * rr20;
+  const float c11 = d10 * rr01 + d11 * rr11 + d12 * rr21;
+  const float c12 = d10 * rr02 + d11 * rr12 + d12 * rr22;
+
+  const float c20 = d20 * rr00 + d21 * rr10 + d22 * rr20;
+  const float c21 = d20 * rr01 + d21 * rr11 + d22 * rr21;
+  const float c22 = d20 * rr02 + d21 * rr12 + d22 * rr22;
+
+  // Match BuildLookRotationMatrix's z flip.
+  dst16[0] = c00;  dst16[1] = c01;  dst16[2] = c02;  dst16[3] = 0.0f;
+  dst16[4] = c10;  dst16[5] = c11;  dst16[6] = c12;  dst16[7] = 0.0f;
+  dst16[8] = -c20; dst16[9] = -c21; dst16[10] = -c22; dst16[11] = 0.0f;
+  dst16[12] = 0.0f; dst16[13] = 0.0f; dst16[14] = 0.0f; dst16[15] = 1.0f;
+}
+
 OpenVRPresenter::OpenVRPresenter()
     : overlay_handle_(vr::k_ulOverlayHandleInvalid), width_(0), height_(0), scale_(1.0f),
       openvr_initialized_(false), overlay_created_(false)
@@ -65,6 +126,12 @@ void OpenVRPresenter::SetFrozenWarpPose(const vr::HmdMatrix34_t &pose)
   std::lock_guard<std::mutex> lock(mtx_);
   frozen_warp_pose_ = pose;
   have_frozen_warp_pose_ = true;
+}
+
+void OpenVRPresenter::SetTimewarpEnabled(bool enable)
+{
+  std::lock_guard<std::mutex> lock(mtx_);
+  timewarp_enabled_ = !!enable;
 }
 
 void OpenVRPresenter::ToPosQuat(const vr::HmdMatrix34_t &m, float pos[3], float quat[4])
@@ -317,11 +384,11 @@ bool OpenVRPresenter::AcquireLookRotation(vr::HmdMatrix34_t &poseOut, PoseSnapsh
   if (vr::VRCompositor() && !vr::VRCompositor()->CanRenderScene())
     return false;
 
-  float lastVSync = 0.0f;
+  float lastVSyncSeconds = 0.0f;
   uint64_t newFrameIndex = last_vsync_frame_counter_;
   while (newFrameIndex == last_vsync_frame_counter_)
   {
-    if (!vr::VRSystem()->GetTimeSinceLastVsync(&lastVSync, &newFrameIndex))
+    if (!vr::VRSystem()->GetTimeSinceLastVsync(&lastVSyncSeconds, &newFrameIndex))
       return false;
     if (newFrameIndex == last_vsync_frame_counter_)
       std::this_thread::yield();
@@ -334,10 +401,10 @@ bool OpenVRPresenter::AcquireLookRotation(vr::HmdMatrix34_t &poseOut, PoseSnapsh
   last_vsync_frame_counter_ = newFrameIndex;
   have_last_vsync_frame_counter_ = true;
 
-  float secondsSinceLastVsync = 0.0f;
-  uint64_t newLastFrame = 0;
-  if (!vr::VRSystem()->GetTimeSinceLastVsync(&secondsSinceLastVsync, &newLastFrame))
-    return false;
+  // Use the vsync timing sample that corresponded to the frame counter change above.
+  // Re-querying here can introduce additional scheduling jitter between the "new frame"
+  // detection and the "seconds since last vsync" sample.
+  float secondsSinceLastVsync = lastVSyncSeconds;
 
   vr::ETrackedPropertyError error = vr::TrackedProp_Success;
   float displayFrequency = vr::VRSystem()->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_DisplayFrequency_Float, &error);
@@ -346,6 +413,14 @@ bool OpenVRPresenter::AcquireLookRotation(vr::HmdMatrix34_t &poseOut, PoseSnapsh
     displayFrequency = 90.0f;
   }
   float frameDuration = 1.0f / displayFrequency;
+  if (secondsSinceLastVsync < 0.0f)
+    secondsSinceLastVsync = 0.0f;
+  // Some runtimes can report values outside [0, frameDuration); wrap to the last interval.
+  while (secondsSinceLastVsync >= frameDuration && frameDuration > 0.0f)
+  {
+    secondsSinceLastVsync -= frameDuration;
+  }
+
   error = vr::TrackedProp_Success;
   float vsyncToPhotons = vr::VRSystem()->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_SecondsFromVsyncToPhotons_Float, &error);
   if (error != vr::TrackedProp_Success)
@@ -368,6 +443,7 @@ bool OpenVRPresenter::AcquireLookRotation(vr::HmdMatrix34_t &poseOut, PoseSnapsh
 
   if (snapshotOut)
   {
+    snapshotOut->hmd_matrix = hmdPose.mDeviceToAbsoluteTracking;
     snapshotOut->frame_counter = last_vsync_frame_counter_;
     ToPosQuat(hmdPose.mDeviceToAbsoluteTracking, snapshotOut->hmd_pos, snapshotOut->hmd_quat);
 
@@ -941,6 +1017,7 @@ void OpenVRPresenter::RenderLoop()
     bool rendered = false;
     {
       std::lock_guard<std::mutex> lock(mtx_);
+      const bool timewarp = timewarp_enabled_;
       bool canRender = device_ && context_ && openvr_initialized_ && overlay_created_ && last_source_srv_;
       if (canRender)
       {
@@ -967,15 +1044,21 @@ void OpenVRPresenter::RenderLoop()
               for (int c = 0; c < 4; ++c)
                 dst[r * 4 + c] = (r == c) ? 1.0f : 0.0f;
             bool appliedRotation = false;
-            vr::HmdMatrix34_t warpPose = predictedPose;
-            if (have_frozen_warp_pose_)
-            {
-              warpPose = frozen_warp_pose_;
-            }
-
             if (warp_follow_head_)
             {
-              BuildLookRotationMatrix(warpPose, dst);
+              if (timewarp && have_frozen_warp_pose_)
+              {
+                BuildTimewarpRotationMatrix(predictedPose, frozen_warp_pose_, dst);
+              }
+              else
+              {
+                vr::HmdMatrix34_t warpPose = predictedPose;
+                if (have_frozen_warp_pose_)
+                {
+                  warpPose = frozen_warp_pose_;
+                }
+                BuildLookRotationMatrix(warpPose, dst);
+              }
               appliedRotation = true;
             }
             dst[16] = fov_half_radians_;

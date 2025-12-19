@@ -29,7 +29,8 @@ public:
                   int height,
                   float scale = 1.0f,
                   int frame_rate = 60,
-                  bool vr_mode = false);
+                  bool vr_mode = false,
+                  bool freeze_warp_pose = false);
 
   // CefClient
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
@@ -95,6 +96,7 @@ private:
   float scale_ = 1.0f;
   int frame_rate_ = 60;
   bool vr_mode_ = false;
+  bool freeze_warp_pose_ = false;
   std::atomic<bool> got_accel_{false};
   std::atomic<bool> xr_frame_in_flight_{false};
   std::atomic<uint64_t> pose_frame_counter_{0};

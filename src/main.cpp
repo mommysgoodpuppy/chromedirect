@@ -178,6 +178,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   int target_fps = 90;   // HARDCODED: 60 FPS cap to mitigate AMD VRAM leak (CEF #3968)
   float fov_deg = 90.0f; // total FOV; half used in shader
   bool warp_follow_head = false;
+  bool freeze_warp_pose = false;
+  bool timewarp = false;
 
   auto parse_bool_switch = [](const std::string &v, bool empty_default_true)
   {
@@ -260,6 +262,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   {
     const std::string v = app_cmd->GetSwitchValue("warp-follow-head");
     warp_follow_head = (v.empty() || v == "1" || v == "true");
+  }
+  if (app_cmd->HasSwitch("freeze-warp-pose"))
+  {
+    const std::string v = app_cmd->GetSwitchValue("freeze-warp-pose");
+    freeze_warp_pose = (v.empty() || v == "1" || v == "true");
+  }
+  if (app_cmd->HasSwitch("timewarp"))
+  {
+    const std::string v = app_cmd->GetSwitchValue("timewarp");
+    timewarp = (v.empty() || v == "1" || v == "true");
   }
 
   if (!g_enable_vr_mode)
@@ -376,9 +388,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     std::cout << "[CEF Demo] OpenVR presenter initialized successfully\n";
     // In VR mode, configure shader panorama FOV
     vr_presenter->SetFOVHalfRadians(0.9773843811168246f);
-    vr_presenter->SetWarpFollowHead(true);
+    vr_presenter->SetWarpFollowHead(warp_follow_head);
     if (warp_follow_head)
       std::cout << "[CEF Demo] Warp follows head yaw enabled\n";
+    if (freeze_warp_pose)
+      std::cout << "[CEF Demo] Warp pose freezing enabled (may add head-rotation judder)\n";
+    if (timewarp)
+    {
+      std::cout << "[CEF Demo] Timewarp enabled (requires pose freezing to be effective)\n";
+      vr_presenter->SetTimewarpEnabled(true);
+    }
     // Alpha handling defaults for AR: premultiplied on, don't ignore texture alpha
     vr_presenter->SetPremultipliedAlpha(true);
     vr_presenter->SetIgnoreTextureAlpha(false);
@@ -424,7 +443,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
   std::cout << "[CEF Demo] Creating browser client...\n";
   std::cout << "[CEF Demo] Browser/input size: " << cef_width << "x" << cef_height << ", overlay/output: " << width << "x" << height << "\n";
-  g_client = new OffscreenClient(g_enable_vr_mode ? nullptr : hWnd, presenter, cef_width, cef_height, 1.0f, target_fps, g_enable_vr_mode);
+  g_client = new OffscreenClient(g_enable_vr_mode ? nullptr : hWnd, presenter, cef_width, cef_height, 1.0f, target_fps, g_enable_vr_mode, freeze_warp_pose);
   CefRefPtr<CefClient> base_client = g_client;
 
   if (vr_presenter && g_client)
