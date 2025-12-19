@@ -30,8 +30,11 @@ public:
   CefRefPtr<CefV8Value> CreatePoseValue() const;
   bool HasPose() const { return has_pose_; }
   bool BindDevice(CefRefPtr<CefV8Context> context, CefRefPtr<CefV8Value> device);
+  bool BindSession(CefRefPtr<CefV8Context> context, CefRefPtr<CefV8Value> session);
   void ClearDevice();
+  void ClearSession();
   bool ApplyPoseToDevice();
+  bool ExternalTick(double predictedDisplayTime);
 
   IMPLEMENT_REFCOUNTING(MinimalRenderHandler);
 
@@ -70,6 +73,14 @@ private:
   ControllerBinding left_binding_;
   ControllerBinding right_binding_;
   bool applying_pose_ = false;
+  bool applying_tick_ = false;
+  bool tick_pending_ = false;
+  double pending_tick_time_ = 0.0;
+
+  CefRefPtr<CefV8Context> session_context_;
+  CefRefPtr<CefV8Value> session_value_;
+  CefRefPtr<CefV8Value> session_set_external_clock_;
+  CefRefPtr<CefV8Value> session_external_tick_;
   std::chrono::steady_clock::time_point first_apply_time_{};
   std::chrono::steady_clock::time_point last_log_time_{};
   uint64_t device_apply_count_ = 0;

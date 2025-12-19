@@ -2,6 +2,7 @@
 #include <include/cef_browser.h>
 #include <include/wrapper/cef_helpers.h>
 #include <iostream>
+#include <string>
 #include <vector>
 
 MinimalRenderHandler::MinimalRenderHandler() {}
@@ -38,6 +39,35 @@ void MinimalRenderHandler::OnWebKitInitialized()
         retval = CefV8Value::CreateBool(true);
         return true;
       }
+      if (name == "__setSession")
+      {
+        CefRefPtr<CefV8Context> ctx = CefV8Context::GetCurrentContext();
+        bool ok = false;
+        if (arguments.size() > 0 && arguments[0].get() && arguments[0]->IsObject())
+        {
+          ok = owner_->BindSession(ctx, arguments[0]);
+        }
+        retval = CefV8Value::CreateBool(ok);
+        return true;
+      }
+      if (name == "__clearSession")
+      {
+        owner_->ClearSession();
+        retval = CefV8Value::CreateBool(true);
+        return true;
+      }
+      if (name == "__externalTick")
+      {
+        double t = 0.0;
+        if (arguments.size() > 0 && arguments[0].get() &&
+            (arguments[0]->IsDouble() || arguments[0]->IsInt() || arguments[0]->IsUInt()))
+        {
+          t = arguments[0]->IsDouble() ? arguments[0]->GetDoubleValue()
+                                       : static_cast<double>(arguments[0]->GetIntValue());
+        }
+        retval = CefV8Value::CreateBool(owner_->ExternalTick(t));
+        return true;
+      }
       return false;
     }
 
@@ -51,8 +81,14 @@ void MinimalRenderHandler::OnWebKitInitialized()
       "if (!cefExt.webxr) cefExt.webxr = {};\n"
       "native function __setDevice();\n"
       "native function __clearDevice();\n"
+      "native function __setSession();\n"
+      "native function __clearSession();\n"
+      "native function __externalTick();\n"
       "cefExt.webxr.setDevice = function(dev){ return __setDevice(dev); };\n"
-      "cefExt.webxr.clearDevice = function(){ return __clearDevice(); };\n";
+      "cefExt.webxr.clearDevice = function(){ return __clearDevice(); };\n"
+      "cefExt.webxr.setSession = function(sess){ return __setSession(sess); };\n"
+      "cefExt.webxr.clearSession = function(){ return __clearSession(); };\n"
+      "cefExt.webxr.externalTick = function(t){ return __externalTick(t); };\n";
   CefRegisterExtension("v8/cef_webxr", kWebXRExtensionJS, new WebXRExtensionHandler(this));
 }
 
@@ -83,6 +119,10 @@ void MinimalRenderHandler::OnContextReleased(CefRefPtr<CefBrowser> browser,
   {
     ClearDevice();
   }
+  if (session_context_.get() && context.get() && context->IsSame(session_context_))
+  {
+    ClearSession();
+  }
 }
 
 bool MinimalRenderHandler::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
@@ -92,8 +132,29 @@ bool MinimalRenderHandler::OnProcessMessageReceived(CefRefPtr<CefBrowser> browse
 {
   if (!message.get())
     return false;
-  if (message->GetName() != "VR_STATE")
+  const std::string name = message->GetName();
+  if (name != "VR_STATE" && name != "XR_TICK")
     return false;
+
+  if (name == "XR_TICK")
+  {
+    auto args = message->GetArgumentList();
+    double t = 0.0;
+    if (args.get() && args->GetSize() > 0 && args->GetType(0) == VTYPE_DOUBLE)
+    {
+      t = args->GetDouble(0);
+    }
+    // Ensure the tick runs *after* the corresponding VR_STATE is applied.
+    tick_pending_ = true;
+    pending_tick_time_ = t;
+    if (has_pose_)
+    {
+      ExternalTick(pending_tick_time_);
+      tick_pending_ = false;
+      pending_tick_time_ = 0.0;
+    }
+    return true;
+  }
 
   auto args = message->GetArgumentList();
   if (!args.get() || args->GetSize() < 1 || args->GetType(0) != VTYPE_BINARY)
@@ -130,6 +191,12 @@ bool MinimalRenderHandler::OnProcessMessageReceived(CefRefPtr<CefBrowser> browse
   has_pose_ = true;
 
   ApplyPoseToDevice();
+  if (tick_pending_)
+  {
+    ExternalTick(pending_tick_time_);
+    tick_pending_ = false;
+    pending_tick_time_ = 0.0;
+  }
 
   if (pose_sequence_ == 1 || (pose_sequence_ % 120) == 0)
   {
@@ -284,6 +351,62 @@ void MinimalRenderHandler::ClearDevice()
   applying_pose_ = false;
 }
 
+bool MinimalRenderHandler::BindSession(CefRefPtr<CefV8Context> context, CefRefPtr<CefV8Value> session)
+{
+  if (!context.get() || !session.get() || !session->IsObject())
+  {
+    std::cout << "[MinimalRenderHandler] WARN webxr.setSession invalid arguments" << std::endl;
+    return false;
+  }
+
+  ClearSession();
+  session_context_ = context;
+  session_value_ = session;
+
+  CefRefPtr<CefV8Value> setExternalClock = session->GetValue("__setExternalClock");
+  CefRefPtr<CefV8Value> externalTick = session->GetValue("__externalTick");
+  if (!setExternalClock.get() || !setExternalClock->IsFunction() ||
+      !externalTick.get() || !externalTick->IsFunction())
+  {
+    std::cout << "[MinimalRenderHandler] WARN webxr.setSession missing __setExternalClock/__externalTick" << std::endl;
+    ClearSession();
+    return false;
+  }
+
+  session_set_external_clock_ = setExternalClock;
+  session_external_tick_ = externalTick;
+
+  bool entered = session_context_->Enter();
+  if (!entered)
+  {
+    std::cout << "[MinimalRenderHandler] WARN webxr.setSession failed to enter context" << std::endl;
+    ClearSession();
+    return false;
+  }
+
+  // Force external clock mode immediately so the session stops self-scheduling.
+  CefV8ValueList args;
+  args.push_back(CefV8Value::CreateBool(true));
+  session_set_external_clock_->ExecuteFunction(session_value_, args);
+  session_context_->Exit();
+
+  std::cout << "[MinimalRenderHandler] webxr.setSession bound (external clock enabled)" << std::endl;
+  return true;
+}
+
+void MinimalRenderHandler::ClearSession()
+{
+  if (session_context_.get())
+  {
+    std::cout << "[MinimalRenderHandler] webxr.clearSession" << std::endl;
+  }
+  session_context_ = nullptr;
+  session_value_ = nullptr;
+  session_set_external_clock_ = nullptr;
+  session_external_tick_ = nullptr;
+  applying_tick_ = false;
+}
+
 bool MinimalRenderHandler::ApplyPoseToDevice()
 {
   if (!device_context_.get())
@@ -367,6 +490,32 @@ bool MinimalRenderHandler::ApplyPoseToDevice()
   }
   LogPoseApply(success, reason);
   return success;
+}
+
+bool MinimalRenderHandler::ExternalTick(double predictedDisplayTime)
+{
+  if (!session_context_.get() || !session_value_.get() || !session_external_tick_.get())
+  {
+    return false;
+  }
+  if (applying_tick_)
+  {
+    return true;
+  }
+
+  bool entered = session_context_->Enter();
+  if (!entered)
+  {
+    return false;
+  }
+
+  applying_tick_ = true;
+  CefV8ValueList args;
+  args.push_back(CefV8Value::CreateDouble(predictedDisplayTime));
+  session_external_tick_->ExecuteFunction(session_value_, args);
+  applying_tick_ = false;
+  session_context_->Exit();
+  return true;
 }
 
 void MinimalRenderHandler::LogPoseApply(bool success, const std::string &reason)

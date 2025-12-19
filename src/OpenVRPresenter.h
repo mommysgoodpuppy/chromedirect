@@ -7,6 +7,8 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
+#include <functional>
+#include <string>
 #include <openvr.h>
 #include "Presenter.h"
 
@@ -19,6 +21,19 @@
 class OpenVRPresenter : public Presenter
 {
 public:
+  struct PoseSnapshot
+  {
+    vr::HmdMatrix34_t hmd_matrix = {};
+    float hmd_pos[3] = {0, 0, 0};
+    float hmd_quat[4] = {0, 0, 0, 1};
+    float left_pos[3] = {0, 0, 0};
+    float left_quat[4] = {0, 0, 0, 1};
+    float right_pos[3] = {0, 0, 0};
+    float right_quat[4] = {0, 0, 0, 1};
+    uint64_t frame_counter = 0;
+  };
+  using PoseCallback = std::function<void(const PoseSnapshot &)>;
+
   OpenVRPresenter();
   ~OpenVRPresenter();
 
@@ -43,6 +58,14 @@ public:
   void SetFOVHalfRadians(float fovHalfRadians);
   void SetWarpFollowHead(bool enable);
 
+  // Called once per OpenVR vsync tick with the exact predicted pose sample used for that tick.
+  // Invoked on the presenter's render thread; keep the callback cheap and thread-safe.
+  void SetPoseCallback(PoseCallback cb);
+
+  // Freeze the warp pose to match the pose used to produce the most recently completed texture.
+  // This is used for v1 determinism when the browser cannot keep up (texture reuse).
+  void SetFrozenWarpPose(const vr::HmdMatrix34_t &pose);
+
   // Get the D3D11 device for CEF compatibility
   Microsoft::WRL::ComPtr<ID3D11Device> GetDevice() const override { return device_; }
 
@@ -54,7 +77,12 @@ private:
   void StartRenderLoop();
   void StopRenderLoop();
   void RenderLoop();
-  bool AcquireLookRotation(vr::HmdMatrix34_t &pose);
+  bool AcquireLookRotation(vr::HmdMatrix34_t &pose, PoseSnapshot *snapshotOut);
+  static void ToPosQuat(const vr::HmdMatrix34_t &m, float pos[3], float quat[4]);
+
+  PoseCallback pose_cb_;
+  vr::HmdMatrix34_t frozen_warp_pose_ = {};
+  bool have_frozen_warp_pose_ = false;
 
   // D3D11 device/context used for interop and copies.
   Microsoft::WRL::ComPtr<ID3D11Device> device_;

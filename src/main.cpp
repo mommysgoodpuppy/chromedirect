@@ -362,10 +362,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
   // Presenter (VR or regular D3D)
   std::shared_ptr<Presenter> presenter;
+  std::shared_ptr<OpenVRPresenter> vr_presenter;
   if (g_enable_vr_mode)
   {
     std::cout << "[CEF Demo] Initializing OpenVR presenter...\n";
-    std::shared_ptr<OpenVRPresenter> vr_presenter = std::make_shared<OpenVRPresenter>();
+    vr_presenter = std::make_shared<OpenVRPresenter>();
     if (!vr_presenter->Initialize(overlay_key.c_str(), width, height, scale_m))
     {
       std::cerr << "[CEF Demo] ERROR: OpenVR presenter initialization failed!\n";
@@ -425,6 +426,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   std::cout << "[CEF Demo] Browser/input size: " << cef_width << "x" << cef_height << ", overlay/output: " << width << "x" << height << "\n";
   g_client = new OffscreenClient(g_enable_vr_mode ? nullptr : hWnd, presenter, cef_width, cef_height, 1.0f, target_fps, g_enable_vr_mode);
   CefRefPtr<CefClient> base_client = g_client;
+
+  if (vr_presenter && g_client)
+  {
+    vr_presenter->SetPoseCallback([client = g_client](const OpenVRPresenter::PoseSnapshot &snapshot)
+                                  { client->OnPresenterPose(snapshot); });
+  }
 
   std::cout << "[CEF Demo] Creating browser with URL: " << start_url << "\n";
   if (!CefBrowserHost::CreateBrowser(wi, base_client, start_url, bs, nullptr, nullptr))

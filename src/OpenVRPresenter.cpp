@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 #include <iostream>
+#include <cmath>
 #include <chrono>
 #include <iomanip>
 #include <dxgi.h>
@@ -51,6 +52,64 @@ OpenVRPresenter::OpenVRPresenter()
       openvr_initialized_(false), overlay_created_(false)
 {
   std::cout << "[OpenVR] OpenVRPresenter constructor\n";
+}
+
+void OpenVRPresenter::SetPoseCallback(PoseCallback cb)
+{
+  std::lock_guard<std::mutex> lock(mtx_);
+  pose_cb_ = std::move(cb);
+}
+
+void OpenVRPresenter::SetFrozenWarpPose(const vr::HmdMatrix34_t &pose)
+{
+  std::lock_guard<std::mutex> lock(mtx_);
+  frozen_warp_pose_ = pose;
+  have_frozen_warp_pose_ = true;
+}
+
+void OpenVRPresenter::ToPosQuat(const vr::HmdMatrix34_t &m, float pos[3], float quat[4])
+{
+  pos[0] = m.m[0][3];
+  pos[1] = m.m[1][3];
+  pos[2] = m.m[2][3];
+
+  // 3x3 rotation -> quaternion (row-major)
+  float r00 = m.m[0][0], r01 = m.m[0][1], r02 = m.m[0][2];
+  float r10 = m.m[1][0], r11 = m.m[1][1], r12 = m.m[1][2];
+  float r20 = m.m[2][0], r21 = m.m[2][1], r22 = m.m[2][2];
+  float trace = r00 + r11 + r22;
+  if (trace > 0.0f)
+  {
+    float S = sqrtf(trace + 1.0f) * 2.0f;
+    quat[3] = 0.25f * S;       // w
+    quat[0] = (r21 - r12) / S; // x
+    quat[1] = (r02 - r20) / S; // y
+    quat[2] = (r10 - r01) / S; // z
+  }
+  else if ((r00 > r11) && (r00 > r22))
+  {
+    float S = sqrtf(1.0f + r00 - r11 - r22) * 2.0f;
+    quat[3] = (r21 - r12) / S;
+    quat[0] = 0.25f * S;
+    quat[1] = (r01 + r10) / S;
+    quat[2] = (r02 + r20) / S;
+  }
+  else if (r11 > r22)
+  {
+    float S = sqrtf(1.0f + r11 - r00 - r22) * 2.0f;
+    quat[3] = (r02 - r20) / S;
+    quat[0] = (r01 + r10) / S;
+    quat[1] = 0.25f * S;
+    quat[2] = (r12 + r21) / S;
+  }
+  else
+  {
+    float S = sqrtf(1.0f + r22 - r00 - r11) * 2.0f;
+    quat[3] = (r10 - r01) / S;
+    quat[0] = (r02 + r20) / S;
+    quat[1] = (r12 + r21) / S;
+    quat[2] = 0.25f * S;
+  }
 }
 
 OpenVRPresenter::~OpenVRPresenter()
@@ -251,7 +310,7 @@ bool OpenVRPresenter::InitializeOpenVR()
   return true;
 }
 
-bool OpenVRPresenter::AcquireLookRotation(vr::HmdMatrix34_t &poseOut)
+bool OpenVRPresenter::AcquireLookRotation(vr::HmdMatrix34_t &poseOut, PoseSnapshot *snapshotOut)
 {
   if (!vr::VRSystem())
     return false;
@@ -306,6 +365,29 @@ bool OpenVRPresenter::AcquireLookRotation(vr::HmdMatrix34_t &poseOut)
   if (!hmdPose.bPoseIsValid)
     return false;
   poseOut = hmdPose.mDeviceToAbsoluteTracking;
+
+  if (snapshotOut)
+  {
+    snapshotOut->frame_counter = last_vsync_frame_counter_;
+    ToPosQuat(hmdPose.mDeviceToAbsoluteTracking, snapshotOut->hmd_pos, snapshotOut->hmd_quat);
+
+    for (vr::TrackedDeviceIndex_t i = 0; i < vr::k_unMaxTrackedDeviceCount; ++i)
+    {
+      if (!poses[i].bPoseIsValid)
+        continue;
+      if (vr::VRSystem()->GetTrackedDeviceClass(i) != vr::TrackedDeviceClass_Controller)
+        continue;
+      auto role = vr::VRSystem()->GetControllerRoleForTrackedDeviceIndex(i);
+      if (role == vr::TrackedControllerRole_LeftHand)
+      {
+        ToPosQuat(poses[i].mDeviceToAbsoluteTracking, snapshotOut->left_pos, snapshotOut->left_quat);
+      }
+      else if (role == vr::TrackedControllerRole_RightHand)
+      {
+        ToPosQuat(poses[i].mDeviceToAbsoluteTracking, snapshotOut->right_pos, snapshotOut->right_quat);
+      }
+    }
+  }
   return true;
 }
 
@@ -839,10 +921,21 @@ void OpenVRPresenter::RenderLoop()
   while (render_running_.load())
   {
     vr::HmdMatrix34_t predictedPose = {};
-    if (!AcquireLookRotation(predictedPose))
+    PoseSnapshot snapshot;
+    if (!AcquireLookRotation(predictedPose, &snapshot))
     {
       std::this_thread::yield();
       continue;
+    }
+
+    PoseCallback pose_cb_local;
+    {
+      std::lock_guard<std::mutex> lock(mtx_);
+      pose_cb_local = pose_cb_;
+    }
+    if (pose_cb_local)
+    {
+      pose_cb_local(snapshot);
     }
 
     bool rendered = false;
@@ -874,9 +967,15 @@ void OpenVRPresenter::RenderLoop()
               for (int c = 0; c < 4; ++c)
                 dst[r * 4 + c] = (r == c) ? 1.0f : 0.0f;
             bool appliedRotation = false;
+            vr::HmdMatrix34_t warpPose = predictedPose;
+            if (have_frozen_warp_pose_)
+            {
+              warpPose = frozen_warp_pose_;
+            }
+
             if (warp_follow_head_)
             {
-              BuildLookRotationMatrix(predictedPose, dst);
+              BuildLookRotationMatrix(warpPose, dst);
               appliedRotation = true;
             }
             dst[16] = fov_half_radians_;

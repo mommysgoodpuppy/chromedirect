@@ -10,7 +10,10 @@
 #include <windows.h>
 #include <memory>
 #include <atomic>
+#include <mutex>
+#include <cstdint>
 #include "Presenter.h"
+#include "OpenVRPresenter.h"
 
 class OffscreenClient final : public CefClient,
                               public CefLifeSpanHandler,
@@ -80,6 +83,9 @@ public:
   HWND GetHostHwnd() const { return host_window_; }
   CefRefPtr<CefBrowser> GetBrowser() const { return browser_; }
 
+  // Called from the OpenVRPresenter render thread.
+  void OnPresenterPose(const OpenVRPresenter::PoseSnapshot &snapshot);
+
 private:
   HWND host_window_ = nullptr;
   std::shared_ptr<Presenter> presenter_;
@@ -90,6 +96,13 @@ private:
   int frame_rate_ = 60;
   bool vr_mode_ = false;
   std::atomic<bool> got_accel_{false};
+  std::atomic<bool> xr_frame_in_flight_{false};
+  std::atomic<uint64_t> pose_frame_counter_{0};
+  uint64_t last_sent_pose_frame_counter_ = 0;
+  OpenVRPresenter::PoseSnapshot in_flight_pose_{};
+  bool have_in_flight_pose_ = false;
+  std::mutex pose_mtx_;
+  OpenVRPresenter::PoseSnapshot latest_pose_{};
 
   bool SendPoseToRenderer(CefRefPtr<CefFrame> frame,
                           const float *hmd_pos,

@@ -17,6 +17,7 @@
 #include <chrono>
 #include <iomanip>
 #include <openvr.h>
+#include <memory>
 
 OffscreenClient::OffscreenClient(HWND host_window,
                                  std::shared_ptr<Presenter> presenter,
@@ -37,6 +38,15 @@ OffscreenClient::OffscreenClient(HWND host_window,
             << ", scale=" << scale << ", vr_mode=" << (vr_mode_ ? "1" : "0") << ")\n";
 }
 
+void OffscreenClient::OnPresenterPose(const OpenVRPresenter::PoseSnapshot &snapshot)
+{
+  {
+    std::lock_guard<std::mutex> lock(pose_mtx_);
+    latest_pose_ = snapshot;
+  }
+  pose_frame_counter_.store(snapshot.frame_counter, std::memory_order_relaxed);
+}
+
 void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
 {
   CEF_REQUIRE_UI_THREAD();
@@ -51,6 +61,79 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
   // Force an invalidation to trigger paint events
   browser->GetHost()->Invalidate(PET_VIEW);
   std::cout << "[Client] Forced browser invalidation to trigger paint\n";
+
+  // v1: externally clocked WebXR (host-driven). In VR mode we run a strict one-in-flight tick loop
+  // that is paced by OpenVR presenter pose snapshots and acknowledged by OnAcceleratedPaint.
+  if (vr_mode_)
+  {
+    class VRTickTask : public CefTask
+    {
+    public:
+      explicit VRTickTask(CefRefPtr<OffscreenClient> c) : client_(c) {}
+
+      void Execute() override
+      {
+        CEF_REQUIRE_UI_THREAD();
+        if (!client_.get())
+          return;
+        auto br = client_->GetBrowser();
+        if (!br.get())
+          return;
+        auto frame = br->GetMainFrame();
+        if (!frame.get())
+          return;
+
+        // Backpressure: don't tick again until we see an accelerated paint.
+        if (client_->xr_frame_in_flight_.load(std::memory_order_relaxed))
+        {
+          CefPostDelayedTask(TID_UI, this, 1);
+          return;
+        }
+
+        const uint64_t pose_fc = client_->pose_frame_counter_.load(std::memory_order_relaxed);
+        if (pose_fc == 0 || pose_fc == client_->last_sent_pose_frame_counter_)
+        {
+          CefPostDelayedTask(TID_UI, this, 1);
+          return;
+        }
+
+        OpenVRPresenter::PoseSnapshot snapshot;
+        {
+          std::lock_guard<std::mutex> lock(client_->pose_mtx_);
+          snapshot = client_->latest_pose_;
+        }
+
+        const bool sent = client_->SendPoseToRenderer(frame,
+                                                     snapshot.hmd_pos, snapshot.hmd_quat,
+                                                     snapshot.left_pos, snapshot.left_quat,
+                                                     snapshot.right_pos, snapshot.right_quat);
+        if (sent)
+        {
+          CefRefPtr<CefProcessMessage> pmTick = CefProcessMessage::Create("XR_TICK");
+          pmTick->GetArgumentList()->SetDouble(0, 0.0); // renderer/iwer will substitute performance.now()
+          frame->SendProcessMessage(PID_RENDERER, pmTick);
+
+          client_->last_sent_pose_frame_counter_ = snapshot.frame_counter;
+          client_->in_flight_pose_ = snapshot;
+          client_->have_in_flight_pose_ = true;
+          client_->xr_frame_in_flight_.store(true, std::memory_order_relaxed);
+
+          // Allow exactly one paint for this tick.
+          br->GetHost()->Invalidate(PET_VIEW);
+        }
+
+        CefPostDelayedTask(TID_UI, this, 0);
+      }
+
+    private:
+      CefRefPtr<OffscreenClient> client_;
+      IMPLEMENT_REFCOUNTING(VRTickTask);
+    };
+
+    std::cout << "[Client] VR external tick loop enabled (one frame in-flight)\n";
+    CefPostDelayedTask(TID_UI, new VRTickTask(this), 0);
+    return;
+  }
 
   // Real OpenVR pose -> page via iwerBridge.applyPose (browser-side injection)
   // In VR mode, pose updates are always enabled at 8ms intervals
@@ -503,9 +586,42 @@ void OffscreenClient::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
   }
 
   got_accel_.store(true, std::memory_order_relaxed);
+  xr_frame_in_flight_.store(false, std::memory_order_relaxed);
   if (presenter_)
   {
     presenter_->PresentSharedHandle(info.shared_texture_handle, width_, height_);
+
+    // Freeze the presenter's warp pose to the pose used for this completed browser frame.
+    if (have_in_flight_pose_)
+    {
+      auto vrp = std::dynamic_pointer_cast<OpenVRPresenter>(presenter_);
+      if (vrp)
+      {
+        vr::HmdMatrix34_t m = {};
+        m.m[0][0] = 1.0f; m.m[0][1] = 0.0f; m.m[0][2] = 0.0f; m.m[0][3] = 0.0f;
+        m.m[1][0] = 0.0f; m.m[1][1] = 1.0f; m.m[1][2] = 0.0f; m.m[1][3] = 0.0f;
+        m.m[2][0] = 0.0f; m.m[2][1] = 0.0f; m.m[2][2] = 1.0f; m.m[2][3] = 0.0f;
+
+        // Prefer exact matrix if available later; for now we only need rotation.
+        const auto &q = in_flight_pose_.hmd_quat;
+        const float x = q[0], y = q[1], z = q[2], w = q[3];
+        const float xx = x * x, yy = y * y, zz = z * z;
+        const float xy = x * y, xz = x * z, yz = y * z;
+        const float wx = w * x, wy = w * y, wz = w * z;
+        m.m[0][0] = 1.0f - 2.0f * (yy + zz);
+        m.m[0][1] = 2.0f * (xy - wz);
+        m.m[0][2] = 2.0f * (xz + wy);
+        m.m[1][0] = 2.0f * (xy + wz);
+        m.m[1][1] = 1.0f - 2.0f * (xx + zz);
+        m.m[1][2] = 2.0f * (yz - wx);
+        m.m[2][0] = 2.0f * (xz - wy);
+        m.m[2][1] = 2.0f * (yz + wx);
+        m.m[2][2] = 1.0f - 2.0f * (xx + yy);
+
+        vrp->SetFrozenWarpPose(m);
+      }
+      have_in_flight_pose_ = false;
+    }
   }
   else
   {
