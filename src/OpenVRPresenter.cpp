@@ -829,8 +829,10 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
   // Acquire keyed mutex if present (try key 0, then 1). Release with the same key we acquired.
   ComPtr<IDXGIKeyedMutex> keyedMutex;
   UINT64 acquiredKey = UINT64_MAX;
+  bool hasKeyedMutex = false;
   if (SUCCEEDED(sharedTex.As(&keyedMutex)))
   {
+    hasKeyedMutex = true;
     HRESULT acquireResult = keyedMutex->AcquireSync(0, 50);
     if (SUCCEEDED(acquireResult))
     {
@@ -847,11 +849,19 @@ void OpenVRPresenter::PresentSharedHandle(HANDLE shared_handle, int srcWidth, in
         if (present_count <= 3)
           std::cout << "[OpenVR] Keyed mutex acquired with key 1\n";
       }
-      else if (present_count <= 5)
+      else if (present_count <= 5 || (present_count % 120) == 0)
       {
         std::cerr << "[OpenVR] WARNING: Failed to acquire keyed mutex with key 0 or 1, hr=0x" << std::hex << acquireResult << std::dec << "\n";
       }
     }
+  }
+
+  // If a keyed mutex exists but we failed to acquire it, the producer may still be writing.
+  // Copying anyway can produce flashing/tearing artifacts that look like "ghost" frames.
+  // In that case, keep the previous texture and just return.
+  if (hasKeyedMutex && acquiredKey == UINT64_MAX)
+  {
+    return;
   }
 
   // Always copy/resolve into our own SRV-capable single-sample texture for safe 120 Hz sampling

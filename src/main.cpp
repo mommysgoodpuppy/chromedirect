@@ -180,6 +180,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   bool warp_follow_head = false;
   bool freeze_warp_pose = false;
   bool timewarp = false;
+  bool vr_debug = false;
+  int pose_delay_frames = 0;
 
   auto parse_bool_switch = [](const std::string &v, bool empty_default_true)
   {
@@ -272,6 +274,15 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
   {
     const std::string v = app_cmd->GetSwitchValue("timewarp");
     timewarp = (v.empty() || v == "1" || v == "true");
+  }
+  if (app_cmd->HasSwitch("vr-debug"))
+  {
+    const std::string v = app_cmd->GetSwitchValue("vr-debug");
+    vr_debug = (v.empty() || v == "1" || v == "true");
+  }
+  if (app_cmd->HasSwitch("pose-delay-frames"))
+  {
+    pose_delay_frames = (std::max)(0, atoi(app_cmd->GetSwitchValue("pose-delay-frames").ToString().c_str()));
   }
 
   if (!g_enable_vr_mode)
@@ -443,7 +454,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
   std::cout << "[CEF Demo] Creating browser client...\n";
   std::cout << "[CEF Demo] Browser/input size: " << cef_width << "x" << cef_height << ", overlay/output: " << width << "x" << height << "\n";
-  g_client = new OffscreenClient(g_enable_vr_mode ? nullptr : hWnd, presenter, cef_width, cef_height, 1.0f, target_fps, g_enable_vr_mode, freeze_warp_pose);
+  g_client = new OffscreenClient(g_enable_vr_mode ? nullptr : hWnd, presenter, cef_width, cef_height, 1.0f, target_fps, g_enable_vr_mode, freeze_warp_pose, vr_debug, pose_delay_frames);
   CefRefPtr<CefClient> base_client = g_client;
 
   if (vr_presenter && g_client)

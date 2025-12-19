@@ -26,7 +26,9 @@ OffscreenClient::OffscreenClient(HWND host_window,
                                  float scale,
                                  int frame_rate,
                                  bool vr_mode,
-                                 bool freeze_warp_pose)
+                                 bool freeze_warp_pose,
+                                 bool vr_debug,
+                                 int pose_delay_frames)
     : host_window_(host_window),
       presenter_(std::move(presenter)),
       width_(width),
@@ -34,7 +36,9 @@ OffscreenClient::OffscreenClient(HWND host_window,
       scale_(scale),
       frame_rate_(frame_rate),
       vr_mode_(vr_mode),
-      freeze_warp_pose_(freeze_warp_pose)
+      freeze_warp_pose_(freeze_warp_pose),
+      vr_debug_(vr_debug),
+      pose_delay_frames_(pose_delay_frames > 0 ? pose_delay_frames : 0)
 {
   std::cout << "[Client] OffscreenClient created (" << width << "x" << height
             << ", scale=" << scale << ", vr_mode=" << (vr_mode_ ? "1" : "0") << ")\n";
@@ -45,6 +49,14 @@ void OffscreenClient::OnPresenterPose(const OpenVRPresenter::PoseSnapshot &snaps
   {
     std::lock_guard<std::mutex> lock(pose_mtx_);
     latest_pose_ = snapshot;
+    if (pose_queue_.empty() || pose_queue_.back().frame_counter != snapshot.frame_counter)
+    {
+      pose_queue_.push_back(snapshot);
+      while (pose_queue_.size() > 32)
+      {
+        pose_queue_.pop_front();
+      }
+    }
   }
   pose_frame_counter_.store(snapshot.frame_counter, std::memory_order_relaxed);
 }
@@ -102,7 +114,20 @@ void OffscreenClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
         OpenVRPresenter::PoseSnapshot snapshot;
         {
           std::lock_guard<std::mutex> lock(client_->pose_mtx_);
-          snapshot = client_->latest_pose_;
+          if (client_->pose_delay_frames_ > 0)
+          {
+            const size_t need = static_cast<size_t>(client_->pose_delay_frames_) + 1;
+            if (client_->pose_queue_.size() < need)
+            {
+              CefPostDelayedTask(TID_UI, this, 1);
+              return;
+            }
+            snapshot = client_->pose_queue_[client_->pose_queue_.size() - need];
+          }
+          else
+          {
+            snapshot = client_->latest_pose_;
+          }
         }
 
         const bool sent = client_->SendPoseToRenderer(frame,
@@ -588,10 +613,44 @@ void OffscreenClient::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
   }
 
   got_accel_.store(true, std::memory_order_relaxed);
-  xr_frame_in_flight_.store(false, std::memory_order_relaxed);
+
+  // In VR mode we want a strict "tick -> exactly one paint -> present" contract.
+  // Chromium can still produce additional paints due to compositor/animation activity.
+  // Presenting those textures breaks pose<->texture association and can look like a
+  // flashing/ghosted double-image on head motion, so we drop unexpected paints.
+  const bool expected_paint = !vr_mode_ || xr_frame_in_flight_.load(std::memory_order_relaxed);
+  if (!expected_paint)
+  {
+    vr_unexpected_paints_.fetch_add(1, std::memory_order_relaxed);
+    if (vr_debug_ && (paint_count <= 10 || (paint_count % 120) == 0))
+    {
+      const uint64_t dropped = vr_unexpected_paints_.load(std::memory_order_relaxed);
+      std::cout << "[Client][VR] dropping unexpected paint#" << paint_count
+                << " dropped_total=" << dropped
+                << " (no XR frame in flight)" << std::endl;
+    }
+    return;
+  }
+
   if (presenter_)
   {
     presenter_->PresentSharedHandle(info.shared_texture_handle, width_, height_);
+
+    if (vr_mode_ && vr_debug_)
+    {
+      const uint64_t latest_fc = pose_frame_counter_.load(std::memory_order_relaxed);
+      const uint64_t inflight_fc = have_in_flight_pose_ ? in_flight_pose_.frame_counter : 0;
+      const uint64_t backlog = (inflight_fc > 0 && latest_fc >= inflight_fc) ? (latest_fc - inflight_fc) : 0;
+      if (paint_count <= 10 || (paint_count % 120) == 0)
+      {
+        std::cout << "[Client][VR] paint#" << paint_count
+                  << " inflight_fc=" << inflight_fc
+                  << " latest_pose_fc=" << latest_fc
+                  << " backlog_frames=" << backlog
+                  << " freeze=" << (freeze_warp_pose_ ? "1" : "0")
+                  << std::endl;
+      }
+    }
 
     // Optional: freeze the presenter's warp pose to the pose used for this completed browser frame.
     // This improves determinism when reusing old textures, but can introduce head-rotation judder
@@ -604,6 +663,12 @@ void OffscreenClient::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
         vrp->SetFrozenWarpPose(in_flight_pose_.hmd_matrix);
       }
       have_in_flight_pose_ = false;
+    }
+
+    // Mark the in-flight XR frame as completed only after we accept/present the paint.
+    if (vr_mode_)
+    {
+      xr_frame_in_flight_.store(false, std::memory_order_relaxed);
     }
   }
   else

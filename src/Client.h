@@ -12,6 +12,7 @@
 #include <atomic>
 #include <mutex>
 #include <cstdint>
+#include <deque>
 #include "Presenter.h"
 #include "OpenVRPresenter.h"
 
@@ -30,7 +31,9 @@ public:
                   float scale = 1.0f,
                   int frame_rate = 60,
                   bool vr_mode = false,
-                  bool freeze_warp_pose = false);
+                  bool freeze_warp_pose = false,
+                  bool vr_debug = false,
+                  int pose_delay_frames = 0);
 
   // CefClient
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
@@ -97,14 +100,18 @@ private:
   int frame_rate_ = 60;
   bool vr_mode_ = false;
   bool freeze_warp_pose_ = false;
+  bool vr_debug_ = false;
+  int pose_delay_frames_ = 0;
   std::atomic<bool> got_accel_{false};
   std::atomic<bool> xr_frame_in_flight_{false};
+  std::atomic<uint64_t> vr_unexpected_paints_{0};
   std::atomic<uint64_t> pose_frame_counter_{0};
   uint64_t last_sent_pose_frame_counter_ = 0;
   OpenVRPresenter::PoseSnapshot in_flight_pose_{};
   bool have_in_flight_pose_ = false;
   std::mutex pose_mtx_;
   OpenVRPresenter::PoseSnapshot latest_pose_{};
+  std::deque<OpenVRPresenter::PoseSnapshot> pose_queue_{};
 
   bool SendPoseToRenderer(CefRefPtr<CefFrame> frame,
                           const float *hmd_pos,
